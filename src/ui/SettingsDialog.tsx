@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { DEFAULT_RULES } from '../core/rules';
+import { dataUrl, logoHash, pngEncode, thumbnail } from '../core/image';
 import { LANG_LABEL, parseList, type LangKey, type Settings } from '../core/settings';
+import { bitmapPixels } from './imageDecode';
 
 interface Props {
   open: boolean;
@@ -15,6 +17,22 @@ export function SettingsDialog({ open, settings, onClose, onSave }: Props) {
   const [words, setWords] = useState(settings.customWords.join('\n'));
   const [regex, setRegex] = useState(settings.customRegex.join('\n'));
   const [regexError, setRegexError] = useState('');
+  const [logoError, setLogoError] = useState('');
+
+  const addLogos = async (files: File[]) => {
+    setLogoError('');
+    const added: Settings['logoSamples'] = [];
+    for (const f of files) {
+      try {
+        const px = bitmapPixels(await createImageBitmap(f));
+        if (!px) throw new Error('decode');
+        added.push({ name: f.name, hash: logoHash(px), thumb: dataUrl(pngEncode(thumbnail(px, 64)), 'image/png') });
+      } catch {
+        setLogoError(`無法讀取圖片：${f.name}（支援 PNG、JPEG、GIF、WebP、BMP）`);
+      }
+    }
+    setDraft((d) => ({ ...d, logoSamples: [...d.logoSamples, ...added].slice(0, 20) }));
+  };
 
   useEffect(() => {
     const d = ref.current;
@@ -83,6 +101,38 @@ export function SettingsDialog({ open, settings, onClose, onSave }: Props) {
           <legend>自訂字眼（公司名稱、專案代號…）</legend>
           <p class="muted">每行一個（也可用逗號分隔）。不分大小寫、全形半形；英文以整字比對。</p>
           <textarea rows={5} value={words} onInput={(e) => setWords(e.currentTarget.value)} placeholder={'ACME Corp\n艾克米股份有限公司\nProject Apollo'} data-testid="custom-words" />
+        </fieldset>
+
+        <fieldset>
+          <legend>Logo 樣本（選用，最準確）</legend>
+          <p class="muted">上傳公司 Logo 圖檔，文件中外觀相同的圖片（即使縮放或重新壓縮）都會被標出。</p>
+          <div class="logo-samples">
+            {draft.logoSamples.map((l, i) => (
+              <span class="logo-chip" key={`${l.hash}${i}`}>
+                <img src={l.thumb} alt="" />
+                <span>{l.name}</span>
+                <button type="button" aria-label={`移除 ${l.name}`} onClick={() => setDraft({ ...draft, logoSamples: draft.logoSamples.filter((_, k) => k !== i) })}>
+                  ×
+                </button>
+              </span>
+            ))}
+            <label class="add-logo">
+              ＋ 加入 Logo 圖片
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp,image/bmp"
+                multiple
+                hidden
+                data-testid="logo-input"
+                onChange={(e) => {
+                  const files = Array.from(e.currentTarget.files ?? []);
+                  e.currentTarget.value = '';
+                  void addLogos(files);
+                }}
+              />
+            </label>
+          </div>
+          {logoError && <p class="error">{logoError}</p>}
         </fieldset>
 
         <fieldset>

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { buildRules, loadSettings, saveSettings, type Settings } from '../core/settings';
+import type { ScanContext } from '../core/types';
 import { DropZone } from './DropZone';
 import { cleanDoc, download, downloadZip, readAndScan, scanBytes, type DocState } from './engine';
 import { FindingsPanel } from './FindingsPanel';
+import { browserDecode } from './imageDecode';
 import { SettingsDialog } from './SettingsDialog';
 
 let seq = 0;
@@ -21,9 +23,9 @@ export function App() {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const rules = useMemo(() => buildRules(settings), [settings]);
-  const rulesRef = useRef(rules);
-  rulesRef.current = rules;
+  const scanCtx = useMemo<ScanContext>(() => ({ rules: buildRules(settings), logoHashes: settings.logoSamples.map((l) => l.hash), decodeImage: browserDecode }), [settings]);
+  const ctxRef = useRef(scanCtx);
+  ctxRef.current = scanCtx;
   const docsRef = useRef(docs);
   docsRef.current = docs;
 
@@ -36,7 +38,7 @@ export function App() {
       const added: DocState[] = files.map((f) => ({ key: `d${++seq}`, name: f.name, size: f.size, status: 'reading', selected: new Set() }));
       setDocs((list) => [...list, ...added]);
       setActiveKey((k) => k ?? added[0]?.key ?? null);
-      for (let i = 0; i < files.length; i++) await readAndScan(files[i]!, added[i]!.key, rulesRef.current, patch);
+      for (let i = 0; i < files.length; i++) await readAndScan(files[i]!, added[i]!.key, ctxRef.current, patch);
     },
     [patch],
   );
@@ -52,11 +54,11 @@ export function App() {
       for (const d of docsRef.current) {
         if (d.bytes && d.format && (d.status === 'ready' || d.status === 'done')) {
           patch(d.key, { status: 'scanning' });
-          await scanBytes(d.key, d.bytes, d.format, rules, patch);
+          await scanBytes(d.key, d.bytes, d.format, scanCtx, patch);
         }
       }
     })();
-  }, [rules, patch]);
+  }, [scanCtx, patch]);
 
   const clean = useCallback(
     async (key: string, autoDownload = true) => {
@@ -64,7 +66,7 @@ export function App() {
       if (!doc || !doc.result) return undefined;
       patch(key, { status: 'cleaning' });
       try {
-        const output = await cleanDoc(doc, rulesRef.current);
+        const output = await cleanDoc(doc, ctxRef.current);
         patch(key, { status: 'done', output });
         if (autoDownload) download(output.name, output.bytes);
         return output;

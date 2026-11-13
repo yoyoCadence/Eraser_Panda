@@ -15,6 +15,7 @@ import zipfile
 
 import docx
 import openpyxl
+import openpyxl.drawing.image
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
 from openpyxl.comments import Comment
@@ -26,6 +27,21 @@ from pptx.util import Inches
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "tests", "fixtures")
 os.makedirs(OUT, exist_ok=True)
+LOGO = os.path.join(OUT, "logo.png")
+PHOTO = os.path.join(OUT, "photo.png")
+
+
+def make_images():
+    from PIL import Image, ImageDraw
+
+    logo = Image.new("RGB", (120, 60), (20, 80, 200))
+    ImageDraw.Draw(logo).rectangle([15, 25, 105, 35], fill=(255, 255, 255))
+    logo.save(LOGO)
+    photo = Image.new("RGB", (160, 100), (240, 240, 240))
+    dr = ImageDraw.Draw(photo)
+    for i in range(0, 160, 20):
+        dr.line([(i, 0), (160 - i, 100)], fill=(200, 60, 60), width=3)
+    photo.save(PHOTO)
 
 LABEL_GUID = "3f5c2a1e-1111-4a2b-9c3d-0123456789ab"
 SITE_GUID = "8a9b0c1d-2222-4e5f-a6b7-0123456789cd"
@@ -133,8 +149,9 @@ def make_docx():
     cp.subject = "Quarterly plan"
 
     sec = d.sections[0]
-    # header: label split across runs (as Word does after spell-check)
+    # header: company logo picture + label split across runs (as Word does after spell-check)
     hp = sec.header.paragraphs[0]
+    hp.add_run().add_picture(LOGO, width=docx.shared.Inches(0.8))
     hp.add_run("ACME ")
     hp.add_run("Confi")
     hp.add_run("dential")
@@ -201,6 +218,7 @@ def make_docx():
             "</v:shape></w:pict></w:r>"
         )
     )
+    d.add_picture(PHOTO, width=docx.shared.Inches(2))  # ordinary body picture — not a logo
     para = d.add_paragraph("Reviewed by legal.")
     d.add_comment(para.runs, text="Do not distribute outside the team.", author="Reviewer")
 
@@ -224,7 +242,9 @@ def make_xlsx():
     ws.oddHeader.center.font = "Arial,Bold"
     ws.oddFooter.left.text = "Page &P"
     ws.oddFooter.right.text = "R&&D Confidential"  # && = literal ampersand in Excel header codes
+    ws.add_image(openpyxl.drawing.image.Image(LOGO), "F1")
     ws2 = wb.create_sheet("Secret Data")
+    ws2.add_image(openpyxl.drawing.image.Image(LOGO), "F1")  # same logo on two sheets
     ws2["A1"] = "Confidential"  # same shared string as Data!A1
     ws2["A2"] = "nothing here"
     wb.properties.creator = "Jane Doe"
@@ -250,6 +270,9 @@ def make_pptx():
     s2.shapes.title.text = "Overview"
     s2.placeholders[1].text = "This deck is confidential. Growth is 12%."
     s2.notes_slide.notes_text_frame.text = "Internal only - do not distribute"
+    for s in (s1, s2):
+        s.shapes.add_picture(LOGO, Inches(8.5), Inches(0.2), width=Inches(1))  # same logo on two slides
+    s2.shapes.add_picture(PHOTO, Inches(1), Inches(4), width=Inches(2))  # ordinary picture once
     s3 = prs.slides.add_slide(prs.slide_layouts[5])
     s3.shapes.title.text = "Numbers"
     cd = CategoryChartData()
@@ -265,6 +288,7 @@ def make_pptx():
 
 
 if __name__ == "__main__":
+    make_images()
     make_docx()
     make_xlsx()
     make_pptx()

@@ -101,8 +101,7 @@ def incremental_pdf():
 
 def reportlab_pdf():
     pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
-    logo = os.path.join(OUT, "logo.png")
-    make_logo(logo)
+    logo = os.path.join(OUT, "logo.png")  # written by make_fixtures.py
     c = canvas.Canvas(os.path.join(OUT, "reportlab.pdf"), pagesize=A4)
     c.setTitle("Plan")
     c.setAuthor("Jane Doe")
@@ -135,25 +134,6 @@ def reportlab_pdf():
     c.save()
 
 
-def make_logo(path):
-    """A tiny deterministic PNG logo (blue square with a white bar) without external dependencies."""
-    import struct
-    import zlib
-
-    wpx, hpx = 40, 20
-    rows = []
-    for y in range(hpx):
-        row = bytearray([0])
-        for x in range(wpx):
-            row += bytes((255, 255, 255)) if 8 <= y <= 11 and 5 <= x <= 34 else bytes((20, 80, 200))
-        rows.append(bytes(row))
-    raw = zlib.compress(b"".join(rows))
-
-    def chunk(t, d):
-        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
-
-    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", wpx, hpx, 8, 2, 0, 0, 0)) + chunk(b"IDAT", raw) + chunk(b"IEND", b"")
-    open(path, "wb").write(png)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_RULES } from '../src/core/rules';
 import type { FormatHandler, ScanContext } from '../src/core/types';
@@ -96,7 +96,7 @@ describe.each([
 describe('docx specifics', () => {
   it('finds labels in every hiding place', async () => {
     const { findings } = await docxHandler.scan(load('sample.docx'), ctx);
-    const by = (loc: string) => findings.filter((f) => f.location === loc).map((f) => f.matchText);
+    const by = (loc: string) => findings.filter((f) => f.location === loc && f.kind !== 'image').map((f) => f.matchText);
     expect(by('header')).toEqual(['Confidential']); // split across runs "Confi" + "dential"
     expect(by('watermark')).toEqual(['CONFIDENTIAL']);
     expect(by('footer')).toEqual(['Restricted', 'Internal Use Only']);
@@ -132,6 +132,70 @@ describe('docx specifics', () => {
     expect(part(out, 'word/header1.xml')).toMatch(/Confi/);
     const rescan = await docxHandler.scan(out, ctx);
     expect(rescan.findings.map((f) => f.id)).toEqual([keep.id]);
+  });
+});
+
+describe('logos', () => {
+  const media = (bytes: Uint8Array) => Object.keys(parts(bytes)).filter((k) => /\/media\//.test(k)).sort();
+
+  it.each([
+    ['sample.docx', docxHandler, 'header'],
+    ['sample.pptx', pptxHandler, 'body'],
+    ['sample.xlsx', xlsxHandler, 'body'],
+  ] as const)('%s: finds the logo, ignores ordinary pictures, removes the logo media', async (name, handler, location) => {
+    const input = load(name);
+    const { findings } = await handler.scan(input, ctx);
+    const logos = findings.filter((f) => f.kind === 'image' && f.matchText.includes('Logo'));
+    expect(logos).toHaveLength(1);
+    expect(logos[0]).toMatchObject({ location, confidence: 'high', defaultSelected: true });
+    expect(logos[0]!.thumbnail).toMatch(/^data:image\/png;base64,/);
+    const before = media(input);
+    const out = await handler.apply(input, ctx, new Set([logos[0]!.id]));
+    const after = media(out);
+    expect(after.length).toBeLessThan(before.length); // the logo file(s) are gone …
+    expect(after.length).toBe(before.length - (name.endsWith('xlsx') ? 2 : 1)); // … (xlsx stores one copy per sheet), ordinary pictures stay
+    expect((await handler.scan(out, ctx)).findings.some((f) => f.kind === 'image' && f.matchText.includes('Logo'))).toBe(false);
+    assertOpens(out, name.slice(-4) as 'docx' | 'xlsx' | 'pptx');
+  });
+
+  it('xlsx header/footer picture (&G + legacyDrawingHF) is removed with its VML part and media', async () => {
+    const p = parts(load('sample.xlsx'));
+    const sheet = strFromU8(p['xl/worksheets/sheet1.xml']!)
+      .replace('<oddHeader>', '<oddHeader>&amp;L&amp;G')
+      .replace('</worksheet>', '<legacyDrawingHF xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rIdHF"/></worksheet>');
+    p['xl/worksheets/sheet1.xml'] = strToU8(sheet);
+    p['xl/worksheets/_rels/sheet1.xml.rels'] = strToU8(
+      strFromU8(p['xl/worksheets/_rels/sheet1.xml.rels']!).replace(
+        '</Relationships>',
+        '<Relationship Id="rIdHF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawingHF1.vml"/></Relationships>',
+      ),
+    );
+    p['xl/drawings/vmlDrawingHF1.vml'] = strToU8(
+      '<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:shape id="LH" type="#_x0000_t75" style="position:absolute;width:60pt;height:30pt"><v:imagedata o:relid="rId1" o:title="logo"/></v:shape></xml>',
+    );
+    p['xl/drawings/_rels/vmlDrawingHF1.vml.rels'] = strToU8(
+      '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/hflogo.png"/></Relationships>',
+    );
+    p['xl/media/hflogo.png'] = new Uint8Array(readFileSync('tests/fixtures/logo.png'));
+    const input = zipSync(p);
+    const { findings } = await xlsxHandler.scan(input, ctx);
+    const hf = findings.find((f) => f.id === 'xl/worksheets/sheet1.xml#hfimage')!;
+    expect(hf).toMatchObject({ kind: 'image', confidence: 'high' });
+    const out = await xlsxHandler.apply(input, ctx, new Set([hf.id]));
+    const q = parts(out);
+    const s1 = strFromU8(q['xl/worksheets/sheet1.xml']!);
+    expect(s1).not.toMatch(/legacyDrawingHF|&amp;G/);
+    expect(s1).toMatch(/<oddHeader>&amp;L&amp;C&amp;"Arial,Bold"Strictly Confidential<\/oddHeader>/); // the rest of the header is intact
+    expect(Object.keys(q).some((k) => /vmlDrawingHF1|hflogo/.test(k))).toBe(false);
+    expect(strFromU8(q['xl/worksheets/_rels/sheet1.xml.rels']!)).not.toMatch(/rIdHF/);
+    assertOpens(out, 'xlsx');
+  });
+
+  it('matches a logo sample even where heuristics would not flag it', async () => {
+    const { logoHash, pngDecode } = await import('../src/core/image');
+    const photo = logoHash(pngDecode(new Uint8Array(readFileSync('tests/fixtures/photo.png')))!);
+    const { findings } = await docxHandler.scan(load('sample.docx'), { ...ctx, logoHashes: [photo] });
+    expect(findings.filter((f) => f.matchText === 'Logo（符合樣本）')).toHaveLength(1);
   });
 });
 

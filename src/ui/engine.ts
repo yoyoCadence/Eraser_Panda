@@ -1,6 +1,6 @@
 import { zipSync } from 'fflate';
 import { cleanFileName, detectFormat } from '../core/fileType';
-import type { FormatId, Rule, ScanResult } from '../core/types';
+import type { FormatId, ScanContext, ScanResult } from '../core/types';
 import { handlerFor } from '../formats';
 
 export type DocStatus = 'reading' | 'scanning' | 'ready' | 'cleaning' | 'done' | 'error';
@@ -32,24 +32,24 @@ export const yieldToUi = () => new Promise<void>((r) => setTimeout(r, 0));
 
 export type Patch = (key: string, patch: Partial<DocState>) => void;
 
-export async function readAndScan(file: File, key: string, rules: Rule[], patch: Patch): Promise<void> {
+export async function readAndScan(file: File, key: string, ctx: ScanContext, patch: Patch): Promise<void> {
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const det = detectFormat(file.name, bytes);
     if (!det.ok) return patch(key, { status: 'error', error: det.message, bytes });
     const handler = handlerFor(det.format);
-    if (!handler) return patch(key, { status: 'error', format: det.format, bytes, error: 'PDF 支援正在開發中，下一版即可使用。' });
+    if (!handler) return patch(key, { status: 'error', format: det.format, bytes, error: '不支援的檔案格式。' });
     patch(key, { status: 'scanning', bytes, format: det.format });
-    await scanBytes(key, bytes, det.format, rules, patch);
+    await scanBytes(key, bytes, det.format, ctx, patch);
   } catch (e) {
     patch(key, { status: 'error', error: errorMessage(e) });
   }
 }
 
-export async function scanBytes(key: string, bytes: Uint8Array, format: FormatId, rules: Rule[], patch: Patch): Promise<void> {
+export async function scanBytes(key: string, bytes: Uint8Array, format: FormatId, ctx: ScanContext, patch: Patch): Promise<void> {
   try {
     await yieldToUi();
-    const result = await handlerFor(format)!.scan(bytes, { rules });
+    const result = await handlerFor(format)!.scan(bytes, ctx);
     const selected = new Set(result.findings.filter((f) => f.removable && f.defaultSelected).map((f) => f.id));
     patch(key, { status: 'ready', result, selected, output: undefined, error: undefined });
   } catch (e) {
@@ -57,13 +57,13 @@ export async function scanBytes(key: string, bytes: Uint8Array, format: FormatId
   }
 }
 
-export async function cleanDoc(doc: DocState, rules: Rule[]): Promise<CleanOutput> {
+export async function cleanDoc(doc: DocState, ctx: ScanContext): Promise<CleanOutput> {
   const handler = handlerFor(doc.format!)!;
   await yieldToUi();
   const ids = new Set([...doc.selected].filter((id) => doc.result!.findings.some((f) => f.id === id && f.removable)));
-  const bytes = await handler.apply(doc.bytes!, { rules }, ids);
+  const bytes = await handler.apply(doc.bytes!, ctx, ids);
   // Verify: re-scan the output. Everything still found must be something the user chose to keep.
-  const rescan = await handler.scan(bytes, { rules });
+  const rescan = await handler.scan(bytes, ctx);
   const kept = doc.result!.findings.length - ids.size;
   const residual = Math.max(0, rescan.findings.length - kept);
   return { name: cleanFileName(doc.name), bytes, removed: ids.size, kept, residual };

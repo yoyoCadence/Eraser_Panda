@@ -50,6 +50,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   check('lists header label', panelText.includes('頁首 1'));
   check('lists Purview label metadata', panelText.includes('敏感度標籤「Confidential」'));
   check('lists watermark', panelText.includes('浮水印'));
+  check('lists header logo with thumbnail', panelText.includes('可能是 Logo') && (await page.locator('[data-group="logo"] img.thumb').count()) > 0);
   if (shots) await page.screenshot({ path: path.join(shots, '2-findings.png'), fullPage: true });
 
   // ---- mark one exception (the header label), then clean ----
@@ -72,8 +73,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   check('verification reports 0 residual', /驗證殘留\s*0/.test(resultText), resultText);
   if (shots) await page.screenshot({ path: path.join(shots, '3-cleaned.png'), fullPage: true });
 
-  // ---- custom keyword triggers a re-scan ----
+  // ---- custom keyword + logo sample trigger a re-scan ----
   await page.getByTestId('open-settings').click();
+  await page.getByTestId('logo-input').setInputFiles(path.join(fixtures, 'photo.png'));
+  await page.locator('.logo-chip').first().waitFor();
   await page.getByTestId('custom-words').fill('Apollo');
   await page.getByTestId('settings-save').click();
   await page.getByTestId('file-input').setInputFiles(path.join(fixtures, 'sample.pptx'));
@@ -81,6 +84,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   await page.getByTestId('findings-panel').waitFor();
   await page.waitForFunction(() => document.querySelector('[data-testid=findings-panel]')?.textContent?.includes('Apollo'));
   check('custom keyword found', (await page.getByTestId('findings-panel').innerText()).includes('Apollo'));
+  await page.locator('.filelist li', { hasText: 'sample.docx' }).locator('.file-btn').click();
+  await page.waitForFunction(() => document.querySelector('[data-testid=findings-panel]')?.textContent?.includes('Logo（符合樣本）'), null, { timeout: 15000 });
+  check('logo sample matches an ordinary picture', true);
+  if (shots) await page.screenshot({ path: path.join(shots, '6-logo.png'), fullPage: false });
 
   // ---- batch: ZIP of every cleanable file ----
   const [zipDl] = await Promise.all([page.waitForEvent('download'), page.getByTestId('clean-all').click()]);

@@ -24,6 +24,10 @@ export interface PdfTextScan {
   units: TextUnit[];
   candidates: Candidate[];
   plan: RemovalPlan;
+  /** whole instructions to delete (image placements): source key → instruction indices */
+  deletes: Map<string, Set<number>>;
+  /** image XObjects whose resource entries must be dropped */
+  dropXObjects: import('pdf-lib').PDFRef[];
   undecodable: number;
 }
 
@@ -196,7 +200,7 @@ export function scanPageText(doc: PDFDocument, compiled: CompiledRules): PdfText
       for (const r of removals) addRemoval(plan, r.run, r.glyph);
     };
   }
-  return { result, units, candidates, plan, undecodable };
+  return { result, units, candidates, plan, deletes: new Map(), dropXObjects: [], undecodable };
 }
 
 function addRemoval(plan: RemovalPlan, run: TextRun, glyph: number): void {
@@ -220,8 +224,9 @@ function addRemoval(plan: RemovalPlan, run: TextRun, glyph: number): void {
  */
 export function applyPlan(doc: PDFDocument, scan: PdfTextScan): void {
   for (const src of scan.result.sources) {
-    const byInstr = scan.plan.get(src.key);
-    if (!byInstr || !byInstr.size) continue;
+    const byInstr = scan.plan.get(src.key) ?? new Map<number, Map<number, Set<number>>>();
+    const deletes = scan.deletes.get(src.key);
+    if (!byInstr.size && !deletes?.size) continue;
     const runsByInstr = new Map<number, TextRun[]>();
     for (const r of scan.result.runs) if (r.src === src && byInstr.has(r.instr)) runsByInstr.set(r.instr, [...(runsByInstr.get(r.instr) ?? []), r]);
 
@@ -229,6 +234,11 @@ export function applyPlan(doc: PDFDocument, scan: PdfTextScan): void {
     let pos = 0;
     const text = latin1(src.data);
     src.instrs.forEach((ins, idx) => {
+      if (deletes?.has(idx)) {
+        chunks.push(text.slice(pos, ins.start), ' ');
+        pos = ins.end;
+        return;
+      }
       const removed = byInstr.get(idx);
       const runs = runsByInstr.get(idx);
       if (!removed || !runs) return;

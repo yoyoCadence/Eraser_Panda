@@ -20,6 +20,8 @@ export interface Settings {
   customWords: string[];
   /** Extra regular expressions (advanced). */
   customRegex: string[];
+  /** User-supplied logo samples: perceptual hash + a small thumbnail for display. */
+  logoSamples: Array<{ name: string; hash: string; thumb: string }>;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -28,6 +30,7 @@ export const DEFAULT_SETTINGS: Settings = {
   disabledRuleIds: [],
   customWords: [],
   customRegex: [],
+  logoSamples: [],
 };
 
 const KEY = 'eraser-panda:settings:v1';
@@ -65,6 +68,12 @@ export function sanitizeSettings(input: unknown): Settings {
   s.disabledRuleIds = strings(o.disabledRuleIds);
   s.customWords = [...new Set(strings(o.customWords))];
   s.customRegex = [...new Set(strings(o.customRegex))];
+  if (Array.isArray(o.logoSamples)) {
+    s.logoSamples = o.logoSamples
+      .filter((x): x is Settings['logoSamples'][number] => !!x && typeof x.hash === 'string' && /^[0-9a-f]{16}@[\d.]+$/.test(x.hash) && typeof x.thumb === 'string' && x.thumb.startsWith('data:image/'))
+      .map((x) => ({ name: String(x.name ?? 'logo').slice(0, 80), hash: x.hash, thumb: x.thumb }))
+      .slice(0, 20);
+  }
   return s;
 }
 

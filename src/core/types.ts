@@ -108,8 +108,10 @@ export interface FormatHandler {
 /** Everything a handler needs besides the bytes. Kept as an object so later milestones can extend it. */
 export interface ScanContext {
   rules: Rule[];
-  /** Perceptual hashes of user-supplied logo samples (milestone M6). */
+  /** Perceptual hashes (core/image.ts `logoHash`) of user-supplied logo samples. */
   logoHashes?: string[];
+  /** Decoder for encoded images (JPEG …) — provided by the browser; PNG and raw PDF images are decoded in-engine. */
+  decodeImage?: import('./image').ImageDecoder;
 }
 
 /** Thrown for problems the user can act on; `message` is shown verbatim in the UI. */

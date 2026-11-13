@@ -107,6 +107,31 @@ describe('PDF page text (real generators)', () => {
   });
 });
 
+describe('PDF logos', () => {
+  it('detects the same image repeated on every page, removes all placements and the image data itself', async () => {
+    const input = load('reportlab.pdf');
+    const { findings } = await pdfHandler.scan(input, ctx);
+    const logos = findings.filter((f) => f.kind === 'image');
+    expect(logos).toHaveLength(1);
+    expect(logos[0]).toMatchObject({ location: 'header', confidence: 'high', defaultSelected: true, page: 1 });
+    expect(logos[0]!.note).toMatch(/2 頁/);
+    expect(logos[0]!.thumbnail).toMatch(/^data:image\/png;base64,/); // decoded in-engine (Flate + ASCII85)
+    expect(logos[0]!.rects![0]!.y).toBeLessThan(0.1);
+    const out = await pdfHandler.apply(input, ctx, new Set([logos[0]!.id]));
+    expect(latin1(out)).not.toMatch(/\/Subtype\s*\/Image/);
+    expect((await pdfHandler.scan(out, ctx)).findings.some((f) => f.kind === 'image')).toBe(false);
+    // text is untouched when only the logo was selected
+    expect((await pdfHandler.scan(out, ctx)).findings.filter((f) => f.kind === 'text').length).toBe(findings.filter((f) => f.kind === 'text').length);
+  });
+
+  it('matches a user-supplied logo sample', async () => {
+    const { logoHash, pngDecode } = await import('../src/core/image');
+    const sample = logoHash(pngDecode(load('logo.png'))!);
+    const { findings } = await pdfHandler.scan(load('reportlab.pdf'), { ...ctx, logoHashes: [sample] });
+    expect(findings.find((f) => f.kind === 'image')!.matchText).toBe('Logo（符合樣本）');
+  });
+});
+
 describe('PDF incremental updates', () => {
   it('drops stale revisions that still contain the label, even when nothing is selected', async () => {
     const input = load('incremental.pdf');
