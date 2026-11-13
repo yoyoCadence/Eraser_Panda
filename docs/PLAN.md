@@ -59,7 +59,7 @@ interface FormatHandler {
 | M1 | 比對核心 | 預設關鍵字庫、正規化、整字/regex、跨片段映射、穩定 ID | ✅ |
 | M2 | OOXML 引擎 | docx/xlsx/pptx 全 part 文字掃描與刪除（含頁首頁尾、浮水印、文字方塊、註解、母片、圖表、Excel 頁首頁尾代碼與公式）；core/app/custom props、MSIP、LabelInfo、customXml；rels/Content_Types 清理 | ✅ |
 | M3 | UI v1（Office 可用） | 檔案清單、發現清單（依類型/位置分組、勾選例外、一鍵全刪、只取消內文）、文字片段預覽、下載 `_clean` 檔 | ✅ |
-| M4 | PDF 基礎 | pdf-lib 載入、Info/XMP/MSIP 移除、圖章/註解/書籤/表單、孤兒物件 GC、pdf.js 頁面預覽 | ⬜ |
+| M4 | PDF 基礎 | pdf-lib 載入、Info/XMP/MSIP 移除、圖章/註解/書籤/表單、孤兒物件 GC、pdf.js 頁面預覽 | ✅ |
 | M5 | PDF 內文刪除 | 內容串流 lexer/直譯器、字型解碼（ToUnicode、WinAnsi/Differences、CID）、命中字形移除 + 字寬補位、Form XObject、Watermark Artifact、座標 → 預覽高亮 | ⬜ |
 | M6 | Logo | PDF 圖片 XObject 定位與跨頁重複偵測、Office 頁首/母片圖片、上傳樣本感知雜湊比對、刪除並清理 | ⬜ |
 | M7 | 預覽強化 | PDF 高亮 + 處理前/後對照；docx/xlsx/pptx 視覺化預覽 | ⬜ |
@@ -106,3 +106,14 @@ interface FormatHandler {
 - [x] 純文字 handler（txt / csv / md）：逐行比對、保留換行與 BOM；Big5 / GB18030 / Shift_JIS 解碼（輸出改 UTF-8 BOM 並提示）
 - [x] E2E（file://）：舊格式訊息、docx 發現、例外保留、下載內容驗證、殘留 0、自訂字眼、ZIP、手機寬度無水平捲動、零網路、零 console error
 - 暫時：PDF 顯示「開發中」（M4/M5 實作）
+
+### M4 PDF 基礎（`src/formats/pdf/`）
+- [x] `core/candidates.ts`：TextUnit / Candidate 模型自 OOXML 抽出為通用模組，PDF 共用
+- [x] `pdfdoc.ts`：pdf-lib 載入（加密檔給出可行動的錯誤訊息）、字串編解碼、**GC：刪除所有自 trailer 不可達的物件**（增量更新舊版本、孤兒物件、舊 object stream）、旋轉感知的座標正規化
+- [x] `metadata.ts`：Info 字典（標題等文字切除、作者 / Company 身分資訊、`MSIP_Label_*` 依 GUID 合併、分級名稱鍵）、XMP（含標籤 / 字眼 / 作者 → 整段移除）、PieceInfo
+- [x] `structure.ts`：註解（標準分級圖章 `/Confidential` `/TopSecret`…、內容命中字眼的任何註解連同 Popup；附件註解）、書籤標題、文件附件（name tree）
+- [x] `render.ts` + `ui/PdfPreview.tsx`：pdf.js worker 以 blob: 內嵌（file:// + CSP 下可用，E2E 驗證實際有畫出像素）；延遲渲染、高亮框、📍定位閃爍、點高亮框反查清單、原始 / 清除後切換
+- [x] `verify/raw.ts`：原始位元組驗證器（PDF 每個串流依 `/Filter` 鏈解碼 Flate / ASCII85 / ASCIIHex；zip 逐 part 含巢狀；XML 實體與 PDF hex / UTF-16 字串展開）——測試證明增量更新殘留的 `CONFIDENTIAL` 在清理後消失
+- [x] 樣本 `scripts/make_pdf_fixtures.py`：office.pdf（LibreOffice 匯出 + MSIP / XMP / 圖章 / 書籤 / 附件）、incremental.pdf、reportlab.pdf（標準字型、斜向浮水印、逐字繪製、CJK CID 字型、重複 Logo）
+- 暫時：掃描結果附警示「頁面上直接繪製的文字將在下一版支援」（M5 完成後移除 `handler.ts` 的 TODO）
+- 已知限制：加密 PDF（含僅有權限密碼者）目前直接拒絕 → M9 評估實作標準安全處理常式解密

@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Generate PDF test documents in tests/fixtures/.
+
+office.pdf       — LibreOffice export of sample.docx (embedded TrueType subsets + ToUnicode, CJK fallback font),
+                   then enriched like real corporate PDFs: Office-style MSIP_Label_* Info keys, XMP with the
+                   label, a "Confidential" stamp, a FreeText comment, bookmarks and an attachment.
+incremental.pdf  — a page whose content was replaced by an incremental update: the old content stream with
+                   "CONFIDENTIAL" is still physically in the file (orphan) — must not survive cleaning.
+reportlab.pdf    — two pages, standard (non-embedded) Helvetica with WinAnsi, a rotated diagonal watermark,
+                   header/footer labels, text drawn glyph-by-glyph, a CJK CID font (MSung-Light, UniCNS-UCS2-H)
+                   and the same logo image on both pages.
+
+Requires: LibreOffice (soffice), pypdf, reportlab.   Run: npm run fixtures
+"""
+import io
+import os
+import shutil
+import subprocess
+import tempfile
+
+from pypdf import PdfReader, PdfWriter
+from pypdf.annotations import FreeText, Text
+from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, FloatObject, NameObject, TextStringObject
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfgen import canvas
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, "..", "tests", "fixtures")
+GUID = "3f5c2a1e-1111-4a2b-9c3d-0123456789ab"
+
+XMP = f"""<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:pdfx="http://ns.adobe.com/pdfx/1.3/">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Q3 Plan - Confidential</rdf:li></rdf:Alt></dc:title>
+<dc:creator><rdf:Seq><rdf:li>Jane Doe</rdf:li></rdf:Seq></dc:creator>
+<pdfx:MSIP_Label_{GUID}_Enabled>true</pdfx:MSIP_Label_{GUID}_Enabled>
+<pdfx:MSIP_Label_{GUID}_Name>Confidential</pdfx:MSIP_Label_{GUID}_Name>
+</rdf:Description></rdf:RDF></x:xmpmeta>
+<?xpacket end="w"?>"""
+
+
+def office_pdf():
+    tmp = tempfile.mkdtemp()
+    shutil.copy(os.path.join(OUT, "sample.docx"), os.path.join(tmp, "office.docx"))
+    subprocess.run(["soffice", "--headless", "--convert-to", "pdf", "--outdir", tmp, os.path.join(tmp, "office.docx")], check=True, capture_output=True, timeout=180)
+    w = PdfWriter(clone_from=os.path.join(tmp, "office.pdf"))
+    w.add_metadata(
+        {
+            f"/MSIP_Label_{GUID}_Enabled": "true",
+            f"/MSIP_Label_{GUID}_Name": "Confidential",
+            f"/MSIP_Label_{GUID}_SiteId": "8a9b0c1d-2222-4e5f-a6b7-0123456789cd",
+            "/Company": "ACME Corp",
+            "/Classification": "Restricted",
+        }
+    )
+    xmp = DecodedStreamObject()
+    xmp.set_data(XMP.encode("utf-8"))
+    xmp[NameObject("/Type")] = NameObject("/Metadata")
+    xmp[NameObject("/Subtype")] = NameObject("/XML")
+    w._root_object[NameObject("/Metadata")] = w._add_object(xmp)
+
+    stamp = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject("/Stamp"),
+            NameObject("/Name"): NameObject("/Confidential"),
+            NameObject("/Rect"): ArrayObject([FloatObject(400), FloatObject(700), FloatObject(560), FloatObject(760)]),
+            NameObject("/F"): FloatObject(4),
+        }
+    )
+    w.add_annotation(page_number=0, annotation=stamp)
+    w.add_annotation(page_number=0, annotation=FreeText(text="Internal only - do not forward", rect=(50, 50, 300, 90)))
+    w.add_annotation(page_number=0, annotation=Text(text="Looks fine to me", rect=(300, 300, 320, 320)))
+    w.add_outline_item("Introduction", 0)
+    w.add_outline_item("Confidential appendix", 0)
+    w.add_attachment("original.docx", b"pretend this is the original document")
+    w.write(os.path.join(OUT, "office.pdf"))
+    shutil.rmtree(tmp)
+
+
+def incremental_pdf():
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setFont("Helvetica", 24)
+    c.drawString(72, 750, "CONFIDENTIAL draft")
+    c.save()
+    base = os.path.join(OUT, "incremental.pdf")
+    open(base, "wb").write(buf.getvalue())
+    # incremental update: replace the page content, leaving the old stream physically in the file
+    w = PdfWriter(base, incremental=True)
+    page = w.pages[0]
+    new = DecodedStreamObject()
+    new.set_data(b"BT /F1 24 Tf 72 750 Td (Public version) Tj ET")
+    page[NameObject("/Contents")] = w._add_object(new)
+    w.add_metadata({"/Title": "Public version"})
+    with open(base, "wb") as f:
+        w.write(f)
+
+
+def reportlab_pdf():
+    pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
+    logo = os.path.join(OUT, "logo.png")
+    make_logo(logo)
+    c = canvas.Canvas(os.path.join(OUT, "reportlab.pdf"), pagesize=A4)
+    c.setTitle("Plan")
+    c.setAuthor("Jane Doe")
+    w, h = A4
+    for n in (1, 2):
+        c.drawImage(logo, 40, h - 70, width=60, height=30)  # same logo, same place, every page
+        c.setFont("Helvetica", 9)
+        c.drawString(110, h - 55, "ACME Corp - Company Confidential")
+        c.drawRightString(w - 40, 30, f"Internal Use Only | Page {n}")
+        # rotated diagonal watermark
+        c.saveState()
+        c.setFont("Helvetica-Bold", 60)
+        c.setFillGray(0.85)
+        c.translate(w / 2, h / 2)
+        c.rotate(45)
+        c.drawCentredString(0, 0, "CONFIDENTIAL")
+        c.restoreState()
+        c.setFont("Helvetica", 12)
+        c.drawString(72, 650, "This report is strictly confidential and intended for the board.")
+        c.drawString(72, 630, "The Secretary approved the plan.")
+        # glyph-by-glyph text: one Tj per character (common in some generators)
+        x = 72
+        for ch in "Secret":
+            c.drawString(x, 610, ch)
+            x += c.stringWidth(ch, "Helvetica", 12)
+        c.drawString(x + 4, 610, "project codename")
+        c.setFont("MSung-Light", 14)
+        c.drawString(72, 580, "本報告為公司機密，請勿外傳。")
+        c.showPage()
+    c.save()
+
+
+def make_logo(path):
+    """A tiny deterministic PNG logo (blue square with a white bar) without external dependencies."""
+    import struct
+    import zlib
+
+    wpx, hpx = 40, 20
+    rows = []
+    for y in range(hpx):
+        row = bytearray([0])
+        for x in range(wpx):
+            row += bytes((255, 255, 255)) if 8 <= y <= 11 and 5 <= x <= 34 else bytes((20, 80, 200))
+        rows.append(bytes(row))
+    raw = zlib.compress(b"".join(rows))
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", wpx, hpx, 8, 2, 0, 0, 0)) + chunk(b"IDAT", raw) + chunk(b"IEND", b"")
+    open(path, "wb").write(png)
+
+
+if __name__ == "__main__":
+    office_pdf()
+    incremental_pdf()
+    reportlab_pdf()
+    for name in ("office.pdf", "incremental.pdf", "reportlab.pdf"):
+        r = PdfReader(os.path.join(OUT, name))
+        print(name, len(r.pages), "pages")

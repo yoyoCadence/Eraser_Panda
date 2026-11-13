@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'preact/hooks';
 import type { Finding, LocationKind } from '../core/types';
 import type { DocState } from './engine';
+import { PdfPreview } from './PdfPreview';
 
 interface Group {
   key: string;
@@ -33,6 +34,11 @@ interface Props {
 export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props) {
   const findings = doc.result?.findings ?? [];
   const [filter, setFilter] = useState('');
+  const [focus, setFocus] = useState<{ id: string | null; tick: number }>({ id: null, tick: 0 });
+  const [view, setView] = useState<'original' | 'clean'>('original');
+  const locate = (id: string) => setFocus((f) => ({ id, tick: f.tick + 1 }));
+  const hasPreview = doc.format === 'pdf' && !!doc.bytes;
+  const previewBytes = view === 'clean' && doc.output ? doc.output.bytes : doc.bytes;
   const removable = useMemo(() => findings.filter((f) => f.removable), [findings]);
   const shown = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -105,6 +111,7 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
             </div>
           )}
 
+          <div class={hasPreview ? 'split' : ''}>
           <div class="groups">
             {GROUPS.map((g) => {
               const items = shown.filter(g.test);
@@ -131,12 +138,49 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
                   </summary>
                   <ul class="findings">
                     {items.map((f) => (
-                      <FindingRow key={f.id} f={f} checked={sel.has(f.id)} disabled={busy} onToggle={(v) => set([f.id], v)} />
+                      <FindingRow
+                        key={f.id}
+                        f={f}
+                        checked={sel.has(f.id)}
+                        disabled={busy}
+                        focused={focus.id === f.id}
+                        onToggle={(v) => set([f.id], v)}
+                        onLocate={hasPreview && f.page ? () => (setView('original'), locate(f.id)) : undefined}
+                      />
                     ))}
                   </ul>
                 </details>
               );
             })}
+          </div>
+          {hasPreview && (
+            <aside class="preview-col">
+              <div class="preview-head">
+                <span class="muted">預覽</span>
+                {doc.output && (
+                  <div class="seg" role="tablist">
+                    <button type="button" role="tab" aria-selected={view === 'original'} class={view === 'original' ? 'on' : ''} onClick={() => setView('original')}>
+                      原始
+                    </button>
+                    <button type="button" role="tab" aria-selected={view === 'clean'} class={view === 'clean' ? 'on' : ''} onClick={() => setView('clean')} data-testid="view-clean">
+                      清除後
+                    </button>
+                  </div>
+                )}
+              </div>
+              <PdfPreview
+                bytes={previewBytes!}
+                findings={view === 'original' ? findings : []}
+                selected={sel}
+                focusId={view === 'original' ? focus.id : null}
+                focusTick={focus.tick}
+                onPick={(id) => {
+                  locate(id);
+                  document.querySelector(`[data-finding-id="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }}
+              />
+            </aside>
+          )}
           </div>
         </>
       )}
@@ -144,10 +188,19 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
   );
 }
 
-function FindingRow({ f, checked, disabled, onToggle }: { f: Finding; checked: boolean; disabled: boolean; onToggle: (v: boolean) => void }) {
+interface RowProps {
+  f: Finding;
+  checked: boolean;
+  disabled: boolean;
+  focused: boolean;
+  onToggle: (v: boolean) => void;
+  onLocate?: () => void;
+}
+
+function FindingRow({ f, checked, disabled, focused, onToggle, onLocate }: RowProps) {
   const ctx = f.context ?? { before: '', match: f.matchText, after: '' };
   return (
-    <li class={`finding${f.removable ? '' : ' report'}${f.removable && !checked ? ' kept' : ''}`} data-finding-id={f.id}>
+    <li class={`finding${f.removable ? '' : ' report'}${f.removable && !checked ? ' kept' : ''}${focused ? ' focused' : ''}`} data-finding-id={f.id}>
       <label>
         {f.removable ? <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onToggle(e.currentTarget.checked)} /> : <span class="nocheck">ℹ️</span>}
         <span class="snippet">
@@ -155,7 +208,23 @@ function FindingRow({ f, checked, disabled, onToggle }: { f: Finding; checked: b
           <mark>{ctx.match}</mark>
           <span class="ctx">{ctx.after}</span>
         </span>
-        <span class="where">{f.where}</span>
+        <span class="where">
+          {onLocate ? (
+            <button
+              type="button"
+              class="locate"
+              onClick={(e) => {
+                e.preventDefault();
+                onLocate();
+              }}
+              title="在預覽中顯示位置"
+            >
+              📍 {f.where}
+            </button>
+          ) : (
+            f.where
+          )}
+        </span>
       </label>
       {(f.note || (f.removable && !checked)) && (
         <p class="note">

@@ -541,6 +541,119 @@ button.link {
   color: var(--danger);
 }
 
+/* ---------- preview ---------- */
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.preview-col {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.seg button {
+  border: 0;
+  border-radius: 0;
+  padding: 4px 12px;
+  background: var(--surface);
+}
+
+.seg button.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+.pdf-preview {
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.pdf-page {
+  position: relative;
+  flex: none;
+  background: #fff;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.pdf-page canvas {
+  display: block;
+}
+
+.page-no {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  font-size: 11px;
+  color: #888;
+}
+
+.hl {
+  position: absolute;
+  padding: 0;
+  border: 2px solid #e5a000;
+  border-radius: 2px;
+  background: rgba(255, 196, 0, 0.28);
+  cursor: pointer;
+}
+
+.hl.kept {
+  border-style: dashed;
+  border-color: #888;
+  background: transparent;
+}
+
+.hl.flash {
+  animation: flash 1.2s ease-out 2;
+}
+
+@keyframes flash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(229, 160, 0, 0.9);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(229, 160, 0, 0);
+  }
+}
+
+.finding.focused {
+  background: var(--accent-weak);
+}
+
+button.locate {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--accent);
+}
+
 /* ---------- settings dialog ---------- */
 dialog.settings {
   width: min(640px, calc(100vw - 32px));
@@ -632,6 +745,18 @@ code {
   background: var(--surface-2);
   padding: 1px 5px;
   border-radius: 4px;
+}
+
+@media (max-width: 1100px) {
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .preview-col {
+    position: static;
+  }
+  .pdf-preview {
+    max-height: 70vh;
+  }
 }
 
 @media (max-width: 860px) {
