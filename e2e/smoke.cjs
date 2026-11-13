@@ -87,6 +87,33 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   const zip = unzipSync(new Uint8Array(fs.readFileSync(await zipDl.path())));
   check('ZIP contains both cleaned files', Object.keys(zip).sort().join(',') === 'sample_clean.docx,sample_clean.pptx', Object.keys(zip).join(','));
 
+  // ---- PDF: metadata/annotation findings, rendered preview, locate, clean ----
+  await page.getByTestId('file-input').setInputFiles(path.join(fixtures, 'office.pdf'));
+  await page.locator('.filelist li', { hasText: 'office.pdf' }).locator('.file-btn').click();
+  await page.getByTestId('findings-panel').waitFor();
+  await page.waitForFunction(() => document.querySelector('[data-testid=findings-panel]')?.textContent?.includes('圖章'));
+  const canvas = page.locator('[data-testid=pdf-preview] canvas').first();
+  await canvas.waitFor({ timeout: 15000 });
+  const painted = await canvas.evaluate((c) => {
+    const ctx = c.getContext('2d');
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    let dark = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] < 128) dark++;
+    return dark;
+  });
+  check('PDF page renders under file:// + CSP', painted > 100, `dark pixels ${painted}`);
+  await page.locator('[data-finding-id="p1#annot:0"] button.locate').click();
+  await page.waitForTimeout(300);
+  check('locate highlights the stamp', await page.locator('.hl.flash').count() > 0);
+  if (shots) await page.screenshot({ path: path.join(shots, '5-pdf.png') });
+  const [pdfDl] = await Promise.all([page.waitForEvent('download'), page.getByTestId('clean-one').click()]);
+  const pdfOut = fs.readFileSync(await pdfDl.path()).toString('latin1');
+  check('PDF download named *_clean.pdf', pdfDl.suggestedFilename() === 'office_clean.pdf', pdfDl.suggestedFilename());
+  check('PDF MSIP / stamp removed', !/MSIP_Label|\/Stamp/.test(pdfOut));
+  await page.getByTestId('view-clean').click();
+  await page.locator('[data-testid=pdf-preview] canvas').first().waitFor({ timeout: 15000 });
+  check('cleaned PDF previews', true);
+
   // ---- mobile layout has no horizontal scroll ----
   await page.setViewportSize({ width: 390, height: 800 });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

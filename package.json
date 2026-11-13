@@ -13,7 +13,7 @@
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run test && npm run build",
     "e2e": "node e2e/smoke.cjs",
-    "fixtures": "python3 scripts/make_fixtures.py"
+    "fixtures": "python3 scripts/make_fixtures.py && python3 scripts/make_pdf_fixtures.py"
   },
   "dependencies": {
     "fflate": "^0.8.3",
