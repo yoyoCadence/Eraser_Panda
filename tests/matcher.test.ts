@@ -147,6 +147,9 @@ describe('tidyRange', () => {
     ['【機密】會議紀錄', '會議紀錄'],
     ['Confidential', ''],
     ['Secret, Confidential', ''],
+    ['Status: Top Secret', 'Status:'],
+    ['Classification：機密', 'Classification：'],
+    ['Confidential: internal memo', 'internal memo'],
   ])('%s → %s', (input, expected) => {
     expect(clean(input)).toBe(expected);
   });

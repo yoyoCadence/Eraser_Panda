@@ -67,6 +67,8 @@ export function matchSegments(segments: readonly Segment[], compiled: CompiledRu
 
 const WS = /[ \t\u00a0\u3000]/;
 const SEP = /[|｜·•\/–—\-,，、;；:：]/;
+/** Separators that may be absorbed on the LEFT of a hit — never colons: "Status: Secret" → "Status:" */
+const SEP_LEFT = /[|｜·•\/–—\-,，、;；]/;
 const END_PUNCT = /[.,;:!?。、，；：！？]/;
 const OPEN = '([{（【「『《〈';
 const CLOSE = ')]}）】」』》〉';
@@ -105,7 +107,7 @@ export function tidyRange(text: string, start: number, end: number): [number, nu
   // label at the start of a list: "Secret | Page 1", or between separators: "A | Secret | B"
   if (R !== null && SEP.test(R) && (L === null || SEP.test(L))) return [L === null ? 0 : start, skipWsRight(re + 1)];
   // label at the end after a separator: "numbers - Secret", "本文件，請勿外傳"
-  if (L !== null && SEP.test(L) && (R === null || END_PUNCT.test(R))) return [skipWsLeft(ls - 1), end];
+  if (L !== null && SEP_LEFT.test(L) && (R === null || END_PUNCT.test(R))) return [skipWsLeft(ls - 1), end];
   // "is secret." → "is."
   if (R !== null && END_PUNCT.test(R) && re === end && ls < start) return [ls, end];
   // plain spaces

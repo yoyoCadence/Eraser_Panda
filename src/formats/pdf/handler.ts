@@ -1,6 +1,7 @@
 import { applyCandidates, unitCandidates, type Candidate } from '../../core/candidates';
 import { compileRules } from '../../core/matcher';
 import type { FormatHandler, ScanContext, ScanResult } from '../../core/types';
+import { applyPlan, scanPageText } from './content/textScan';
 import { scanPdfMetadata } from './metadata';
 import { loadPdf, savePdf } from './pdfdoc';
 import { scanAnnotations, scanAttachments, scanOutlines } from './structure';
@@ -11,10 +12,12 @@ async function collect(bytes: Uint8Array, ctx: ScanContext) {
   const meta = scanPdfMetadata(doc, compiled);
   const units = [...meta.units, ...scanOutlines(doc)];
   const attachments = scanAttachments(doc);
-  const candidates: Candidate[] = [...unitCandidates(units, compiled), ...meta.candidates, ...scanAnnotations(doc, compiled), ...attachments.candidates];
-  // TODO(M5): remove once page content (text drawn on the page) is scanned.
-  const warnings: string[] = ['目前版本只處理 PDF 的 metadata、註解、書籤與附件；頁面上直接繪製的文字（頁首頁尾、浮水印、內文）將在下一版支援。'];
-  return { doc, candidates, warnings, finalize: [attachments.finalize] };
+  const text = scanPageText(doc, compiled);
+  const candidates: Candidate[] = [...text.candidates, ...unitCandidates(units, compiled), ...meta.candidates, ...scanAnnotations(doc, compiled), ...attachments.candidates];
+  const warnings: string[] = [];
+  if (text.undecodable > 0) warnings.push(`有 ${text.undecodable} 個字元因字型缺少字元對照表（ToUnicode）而無法辨識，這些文字無法被偵測。`);
+  if (!text.result.runs.length && doc.getPageCount() > 0) warnings.push('頁面上沒有可辨識的文字（可能是掃描影像或文字已轉為外框），只能處理 metadata 與註解。');
+  return { doc, candidates, warnings, finalize: [attachments.finalize, () => applyPlan(doc, text)] };
 }
 
 export const pdfHandler: FormatHandler = {

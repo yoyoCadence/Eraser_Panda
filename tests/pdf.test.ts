@@ -79,6 +79,34 @@ describe('PDF metadata & structure (office.pdf)', () => {
   });
 });
 
+describe('PDF page text (real generators)', () => {
+  it('LibreOffice export: decodes subset TrueType + CJK fonts and removes every label', async () => {
+    const { scan, out, rescan } = await cleanAll(load('office.pdf'));
+    const text = scan.findings.filter((f) => f.kind === 'text').map((f) => `${f.location}:${f.matchText}`);
+    expect(text).toEqual(
+      expect.arrayContaining(['header:Confidential', 'body:STRICTLY CONFIDENTIAL', 'body:公司機密文件', 'body:請勿外傳', 'footer:Restricted', 'footer:Internal Use Only']),
+    );
+    expect(rescan.findings).toEqual([]);
+    const t = pypdfText(out, 'office_text_clean.pdf');
+    if (t !== undefined) {
+      expect(t).not.toMatch(/Confidential|CONFIDENTIAL|Restricted|Top Secret|機密/);
+      expect(t).toMatch(/The Secretary approved the budget/);
+    }
+  });
+
+  it('reportlab: standard fonts, rotated watermark, glyph-by-glyph text, CID font with UniCNS-UCS2-H', async () => {
+    const { scan, out, rescan } = await cleanAll(load('reportlab.pdf'));
+    const p1 = scan.findings.filter((f) => f.page === 1).map((f) => `${f.location}:${f.matchText}`);
+    expect(p1).toEqual(
+      expect.arrayContaining(['header:Company Confidential', 'footer:Internal Use Only', 'watermark:CONFIDENTIAL', 'body:strictly confidential', 'body:Secret', 'body:公司機密']),
+    );
+    expect(rescan.findings).toEqual([]);
+    expect(rawScan('pdf', out, compiled)).toEqual([]);
+    const t = pypdfText(out, 'reportlab_clean.pdf');
+    if (t !== undefined) expect(t).toMatch(/project codename/);
+  });
+});
+
 describe('PDF incremental updates', () => {
   it('drops stale revisions that still contain the label, even when nothing is selected', async () => {
     const input = load('incremental.pdf');
