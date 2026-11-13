@@ -56,7 +56,7 @@ interface FormatHandler {
 | # | 里程碑 | 內容 | 狀態 |
 |---|--------|------|------|
 | M0 | 專案骨架 | 需求/計畫/交接文件、Vite+TS+Preact、單檔 HTML 打包、CSP、拖曳區、CI | ✅ |
-| M1 | 比對核心 | 預設關鍵字庫、正規化、整字/regex、跨片段映射、穩定 ID | ⬜ |
+| M1 | 比對核心 | 預設關鍵字庫、正規化、整字/regex、跨片段映射、穩定 ID | ✅ |
 | M2 | OOXML 引擎 | docx/xlsx/pptx 全 part 文字掃描與刪除（含頁首頁尾、浮水印、文字方塊、註解、母片、圖表、Excel 頁首頁尾代碼與公式）；core/app/custom props、MSIP、LabelInfo、customXml；rels/Content_Types 清理 | ⬜ |
 | M3 | UI v1（Office 可用） | 檔案清單、發現清單（依類型/位置分組、勾選例外、一鍵全刪、只取消內文）、文字片段預覽、下載 `_clean` 檔 | ⬜ |
 | M4 | PDF 基礎 | pdf-lib 載入、Info/XMP/MSIP 移除、圖章/註解/書籤/表單、孤兒物件 GC、pdf.js 頁面預覽 | ⬜ |
@@ -75,3 +75,10 @@ interface FormatHandler {
 - [x] Vite + TS + Preact + 單檔打包（`dist/index.html` ≈ 28 KB）+ CSP `connect-src 'none'`
 - [x] 拖曳區（整個視窗皆可放）/ 選檔；格式偵測以 magic bytes 為準（含舊格式、加密檔的人話錯誤訊息）
 - [x] Vitest（happy-dom）+ `e2e/smoke.cjs`（file:// 開啟、零網路請求、零 console error）+ GitHub Actions CI
+
+### M1 比對核心
+- [x] `core/normalize.ts`：逐 code point NFKC + 大小寫摺疊 + 空白折疊 + 去除零寬字元，保留正規化 → 原始索引對照
+- [x] `core/rules.ts`：預設字庫（英 / 繁 / 簡 / 日 / 韓），刻意排除 Internal、Private、General、Public、單字「密」等高誤判字；`userRule()` 自訂規則；穩定 rule id
+- [x] `core/matcher.ts`：字面規則 → regex（片語內空白可有可無、CJK 字距空白容忍、整字邊界不含 CJK）；使用者 regex；重疊命中取聯集（最長規則命名）
+- [x] `core/segments.ts`：跨片段比對（Word run / PDF 繪字指令）→ 每片段刪除區間；virtual 片段（推測空白）不參與刪除；上下文片段；`wholeUnit`（整段只有標籤 → 高信心）
+- 已知取捨：英文整字比對下 `time-sensitive` 會命中 `sensitive`（連字號是邊界），交給使用者例外處理
