@@ -1,6 +1,7 @@
 import { compileRules, type CompiledRules } from '../../core/matcher';
+import { buildPreview } from '../../core/preview';
 import { detectFormat } from '../../core/fileType';
-import type { FormatHandler, FormatId, ScanContext, ScanResult } from '../../core/types';
+import type { FormatHandler, FormatId, PreviewBlock, ScanContext, ScanResult } from '../../core/types';
 import { collectDocx } from './docx';
 import { collectChart, collectDmlParagraphs } from './drawingml';
 import { scanOoxmlImages } from './images';
@@ -18,6 +19,7 @@ interface Collected {
   candidates: Candidate[];
   warnings: string[];
   pageCount?: number;
+  preview: PreviewBlock[];
   /** nested packages to re-save into the parent after applying, deepest first */
   finalizers: Array<() => void>;
 }
@@ -87,7 +89,8 @@ async function collect(pkg: OoxmlPackage, format: OoxmlFormat, compiled: Compile
   const root = pkg.paths.find((p) => /^(word\/document|xl\/workbook|ppt\/presentation)\.xml$/.test(p));
   if (root && pkg.text(root)?.includes('http://purl.oclc.org/ooxml/')) warnings.push('此檔案為 Strict Open XML 格式，部分位置可能無法偵測。建議在 Office 中另存為一般格式。');
 
-  return { pkg, candidates, warnings, pageCount, finalizers };
+  const preview = depth === 0 ? buildPreview(units, candidates, format === 'pptx' ? 3 : 1) : [];
+  return { pkg, candidates, warnings, pageCount, preview, finalizers };
 }
 
 function dedupe(units: TextUnit[]): TextUnit[] {
@@ -116,6 +119,7 @@ export function createOoxmlHandler(id: OoxmlFormat): FormatHandler {
         findings: c.candidates.map((x) => x.finding),
         warnings: c.warnings,
         pageCount: c.pageCount,
+        preview: c.preview,
       };
     },
     async apply(input: Uint8Array, ctx: ScanContext, removeIds: ReadonlySet<string>): Promise<Uint8Array> {

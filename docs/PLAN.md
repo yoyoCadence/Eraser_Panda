@@ -62,7 +62,7 @@ interface FormatHandler {
 | M4 | PDF 基礎 | pdf-lib 載入、Info/XMP/MSIP 移除、圖章/註解/書籤/表單、孤兒物件 GC、pdf.js 頁面預覽 | ✅ |
 | M5 | PDF 內文刪除 | 內容串流 lexer/直譯器、字型解碼（ToUnicode、WinAnsi/Differences、CID）、命中字形移除 + 字寬補位、Form XObject、Watermark Artifact、座標 → 預覽高亮 | ✅ |
 | M6 | Logo | PDF 圖片 XObject 定位與跨頁重複偵測、Office 頁首/母片圖片、上傳樣本感知雜湊比對、刪除並清理 | ✅ |
-| M7 | 預覽強化 | PDF 高亮 + 處理前/後對照；docx/xlsx/pptx 視覺化預覽 | ⬜ |
+| M7 | 預覽強化 | PDF 高亮 + 處理前/後對照；docx/xlsx/pptx 結構化預覽 | ✅ |
 | M8 | 信任與批次 | 輸出驗證（殘留 0）、稽核報告 JSON/CSV、多檔 ZIP、設定匯出/匯入 | ⬜ |
 | M9 | 強化與發佈 | Playwright E2E（含「零網路請求」）、Web Worker、加密/舊格式/損毀檔訊息、中英切換、`release/EraserPanda.html` | ⬜ |
 
@@ -134,3 +134,8 @@ interface FormatHandler {
 - [x] Office（`ooxml/images.ts`）：Word 頁首頁尾圖片與**圖片浮水印**、PowerPoint 母片 / 版面配置圖片與 2+ 張投影片重複的圖片、Excel 2+ 工作表重複圖片與**頁首頁尾圖片（`&G` + legacyDrawingHF VML）**；**依內容（bytes 雜湊）分組**（openpyxl / Office 會把同一 Logo 存成多個檔）；移除圖形元素（含 mc:AlternateContent）後清理無引用的 rels 與 media；一般圖片不誤判（測試）
 - [x] UI：「Logo / 圖片」群組、縮圖、設定中**上傳 Logo 樣本**（瀏覽器計算雜湊，存 localStorage）、`ScanContext.decodeImage` 注入瀏覽器 JPEG 解碼
 - 已知限制：EMF / WMF（Office 常見向量 Logo）無法產生縮圖或雜湊，只能靠位置啟發式；PDF 中以向量路徑繪製的 Logo 無法偵測
+
+### M7 預覽
+- [x] PDF：視覺預覽 + 文字 / 圖片 / 註解高亮框 + 原始 / 清除後切換（M4–M6 完成）
+- [x] Office / 純文字：**結構化文字預覽**（`core/preview.ts`）—— 依投影片、頁首頁尾、工作表、內文分區，顯示命中段落與前後文（PPT 顯示整張投影片文字），所有命中處高亮；例外以虛線刪除線顯示；清單 📍 ↔ 預覽雙向定位
+- 決策：不引入 docx-preview 等渲染器 —— 只支援 Word、體積大、且無法把 Finding 精確對應到渲染結果；結構化預覽直接來自引擎的文字單元，對應精確且三種格式通用

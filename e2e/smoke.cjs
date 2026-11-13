@@ -51,6 +51,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   check('lists Purview label metadata', panelText.includes('敏感度標籤「Confidential」'));
   check('lists watermark', panelText.includes('浮水印'));
   check('lists header logo with thumbnail', panelText.includes('可能是 Logo') && (await page.locator('[data-group="logo"] img.thumb').count()) > 0);
+  check('structured preview shows the header block', (await page.getByTestId('text-preview').innerText()).includes('頁首 1'));
+  await page.locator('[data-group="hf"] li', { hasText: '頁尾 1' }).first().locator('button.locate').click();
+  await page.waitForTimeout(300);
+  check('locate flashes the hit in the text preview', (await page.locator('[data-testid=text-preview] mark.flash').count()) === 1);
   if (shots) await page.screenshot({ path: path.join(shots, '2-findings.png'), fullPage: true });
 
   // ---- mark one exception (the header label), then clean ----

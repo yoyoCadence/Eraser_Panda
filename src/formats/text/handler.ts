@@ -81,9 +81,21 @@ function analyse(bytes: Uint8Array, ctx: ScanContext) {
 export const textHandler: FormatHandler = {
   id: 'text',
   async scan(bytes, ctx): Promise<ScanResult> {
-    const { decoded, findings } = analyse(bytes, ctx);
+    const { decoded, findings, lines, cuts } = analyse(bytes, ctx);
+    const hitLines = new Map<number, Array<{ start: number; end: number; id: string }>>();
+    for (const f of findings) {
+      const m = /^L(\d+):(\d+)-(\d+)$/.exec(f.id)!;
+      const n = Number(m[1]) - 1;
+      hitLines.set(n, [...(hitLines.get(n) ?? []), { start: Number(m[2]), end: Number(m[3]), id: f.id }]);
+    }
+    void cuts;
+    const shown = [...new Set([...hitLines.keys()].flatMap((n) => [n - 1, n, n + 1]))].filter((n) => n >= 0 && n < lines.length).sort((a, b) => a - b);
+    const previewLines = shown.slice(0, 400).flatMap((n, i) => [
+      ...(i > 0 && n !== shown[i - 1]! + 1 ? [{ text: '…', marks: [] }] : []),
+      { text: lines[n]!.replace(/\r?\n$/, ''), marks: hitLines.get(n) ?? [], tag: `${n + 1}` },
+    ]);
     const warnings = decoded.encoding !== 'utf-8' && decoded.encoding !== 'utf-16le' && decoded.encoding !== 'utf-16be' ? [`原檔編碼為 ${decoded.encoding.toUpperCase()}，輸出檔將改為 UTF-8（含 BOM），Excel 仍可正常開啟。`] : [];
-    return { format: 'text', findings, warnings };
+    return { format: 'text', findings, warnings, preview: previewLines.length ? [{ title: '檔案內容', lines: previewLines }] : [] };
   },
   async apply(bytes, ctx, removeIds) {
     const { decoded, lines, cuts } = analyse(bytes, ctx);
