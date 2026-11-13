@@ -3,6 +3,7 @@ import { detectFormat } from '../../core/fileType';
 import type { FormatHandler, FormatId, ScanContext, ScanResult } from '../../core/types';
 import { collectDocx } from './docx';
 import { collectChart, collectDmlParagraphs } from './drawingml';
+import { scanOoxmlImages } from './images';
 import { scanMetadata } from './metadata';
 import { OoxmlPackage } from './package';
 import { collectPptx } from './pptx';
@@ -21,7 +22,7 @@ interface Collected {
   finalizers: Array<() => void>;
 }
 
-function collect(pkg: OoxmlPackage, format: OoxmlFormat, compiled: CompiledRules, prefix: string, depth: number): Collected {
+async function collect(pkg: OoxmlPackage, format: OoxmlFormat, compiled: CompiledRules, ctx: ScanContext, prefix: string, depth: number): Promise<Collected> {
   const warnings: string[] = [];
   const finalizers: Array<() => void> = [];
   let units: TextUnit[] = [];
@@ -49,7 +50,12 @@ function collect(pkg: OoxmlPackage, format: OoxmlFormat, compiled: CompiledRules
 
   const meta = scanMetadata(pkg, compiled);
   units = dedupe([...units, ...meta.units]);
-  const candidates = [...unitCandidates(units, compiled, prefix), ...prefixed(extra, prefix), ...prefixed(meta.candidates, prefix)];
+  const candidates = [
+    ...unitCandidates(units, compiled, prefix),
+    ...prefixed(extra, prefix),
+    ...(await scanOoxmlImages(pkg, format, ctx, prefix)),
+    ...prefixed(meta.candidates, prefix),
+  ];
 
   // ---- embedded Office files (chart data workbooks, embedded documents) — processed recursively ----
   for (const path of pkg.paths.filter((p) => /\/embeddings\//.test(p))) {
@@ -58,7 +64,7 @@ function collect(pkg: OoxmlPackage, format: OoxmlFormat, compiled: CompiledRules
     if (det.ok && (det.format === 'docx' || det.format === 'xlsx' || det.format === 'pptx') && depth < 3) {
       try {
         const child = new OoxmlPackage(bytes);
-        const sub = collect(child, det.format, compiled, `${prefix}${path}!`, depth + 1);
+        const sub = await collect(child, det.format, compiled, ctx, `${prefix}${path}!`, depth + 1);
         for (const c of sub.candidates) {
           c.finding.where = `內嵌檔案 ${path.slice(path.lastIndexOf('/') + 1)}・${c.finding.where}`;
           c.finding.page = undefined;
@@ -104,7 +110,7 @@ export function createOoxmlHandler(id: OoxmlFormat): FormatHandler {
     id,
     async scan(input: Uint8Array, ctx: ScanContext): Promise<ScanResult> {
       const compiled = compileRules(ctx.rules);
-      const c = collect(new OoxmlPackage(input), id, compiled, '', 0);
+      const c = await collect(new OoxmlPackage(input), id, compiled, ctx, '', 0);
       return {
         format: id as FormatId,
         findings: c.candidates.map((x) => x.finding),
@@ -114,7 +120,7 @@ export function createOoxmlHandler(id: OoxmlFormat): FormatHandler {
     },
     async apply(input: Uint8Array, ctx: ScanContext, removeIds: ReadonlySet<string>): Promise<Uint8Array> {
       const compiled = compileRules(ctx.rules);
-      const c = collect(new OoxmlPackage(input), id, compiled, '', 0);
+      const c = await collect(new OoxmlPackage(input), id, compiled, ctx, '', 0);
       const selected = c.candidates.filter((x) => x.finding.removable && removeIds.has(x.finding.id));
       for (const s of selected) s.touched = true;
       applyCandidates(selected);

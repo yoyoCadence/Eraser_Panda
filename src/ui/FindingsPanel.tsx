@@ -15,9 +15,10 @@ const OTHER: LocationKind[] = ['textbox', 'chart', 'formula', 'comment', 'notes'
 const GROUPS: Group[] = [
   { key: 'label', label: '敏感度標籤 / 分級屬性', hint: 'DLP 最常見的觸發來源（隱藏在檔案 metadata）', test: (f) => f.removable && f.location === 'label' },
   { key: 'watermark', label: '浮水印', test: (f) => f.removable && f.location === 'watermark' },
-  { key: 'hf', label: '頁首 / 頁尾 / 母片', test: (f) => f.removable && ['header', 'footer', 'master'].includes(f.location) },
-  { key: 'body', label: '內文', hint: '刪除內文語句中的字眼可能改變語意，請確認', test: (f) => f.removable && f.location === 'body' },
-  { key: 'other', label: '文字方塊 / 圖表 / 公式 / 註解 / 備忘稿', test: (f) => f.removable && OTHER.includes(f.location) },
+  { key: 'logo', label: 'Logo / 圖片', hint: '依「跨頁重複」「頁首頁尾 / 母片」「符合 Logo 樣本」判斷', test: (f) => f.removable && f.kind === 'image' && f.location !== 'property' && f.location !== 'watermark' },
+  { key: 'hf', label: '頁首 / 頁尾 / 母片', test: (f) => f.removable && f.kind !== 'image' && ['header', 'footer', 'master'].includes(f.location) },
+  { key: 'body', label: '內文', hint: '刪除內文語句中的字眼可能改變語意，請確認', test: (f) => f.removable && f.kind !== 'image' && f.location === 'body' },
+  { key: 'other', label: '文字方塊 / 圖表 / 公式 / 註解 / 備忘稿', test: (f) => f.removable && f.kind !== 'image' && OTHER.includes(f.location) },
   { key: 'property', label: '文件屬性 / 身分資訊 / 縮圖', test: (f) => f.removable && f.location === 'property' },
   { key: 'report', label: '僅提示（無法自動處理）', hint: '請在原始軟體中手動修改', test: (f) => !f.removable },
 ];
@@ -204,6 +205,7 @@ function FindingRow({ f, checked, disabled, focused, onToggle, onLocate }: RowPr
       <label>
         {f.removable ? <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onToggle(e.currentTarget.checked)} /> : <span class="nocheck">ℹ️</span>}
         <span class="snippet">
+          {f.thumbnail && <img class="thumb" src={f.thumbnail} alt="" />}
           <span class="ctx">{ctx.before}</span>
           <mark>{ctx.match}</mark>
           <span class="ctx">{ctx.after}</span>
@@ -230,6 +232,7 @@ function FindingRow({ f, checked, disabled, focused, onToggle, onLocate }: RowPr
         <p class="note">
           {f.removable && !checked && <span class="tag keep">例外・保留</span>}
           {f.confidence === 'high' && f.removable && <span class="tag high">高信心</span>}
+          {f.confidence === 'low' && f.removable && <span class="tag low">請確認</span>}
           {f.note}
         </p>
       )}

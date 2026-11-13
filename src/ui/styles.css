@@ -654,6 +654,66 @@ button.locate {
   color: var(--accent);
 }
 
+img.thumb {
+  max-width: 64px;
+  max-height: 40px;
+  vertical-align: middle;
+  margin-right: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: repeating-conic-gradient(#ddd 0% 25%, #fff 0% 50%) 50% / 10px 10px;
+}
+
+.tag.low {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.logo-samples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.logo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 4px 4px 6px;
+  font-size: 12px;
+  max-width: 100%;
+}
+
+.logo-chip img {
+  max-height: 28px;
+  max-width: 56px;
+}
+
+.logo-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
+.logo-chip button {
+  border: 0;
+  padding: 0 6px;
+  background: none;
+}
+
+.add-logo {
+  cursor: pointer;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
 /* ---------- settings dialog ---------- */
 dialog.settings {
   width: min(640px, calc(100vw - 32px));

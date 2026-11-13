@@ -61,7 +61,7 @@ interface FormatHandler {
 | M3 | UI v1（Office 可用） | 檔案清單、發現清單（依類型/位置分組、勾選例外、一鍵全刪、只取消內文）、文字片段預覽、下載 `_clean` 檔 | ✅ |
 | M4 | PDF 基礎 | pdf-lib 載入、Info/XMP/MSIP 移除、圖章/註解/書籤/表單、孤兒物件 GC、pdf.js 頁面預覽 | ✅ |
 | M5 | PDF 內文刪除 | 內容串流 lexer/直譯器、字型解碼（ToUnicode、WinAnsi/Differences、CID）、命中字形移除 + 字寬補位、Form XObject、Watermark Artifact、座標 → 預覽高亮 | ✅ |
-| M6 | Logo | PDF 圖片 XObject 定位與跨頁重複偵測、Office 頁首/母片圖片、上傳樣本感知雜湊比對、刪除並清理 | ⬜ |
+| M6 | Logo | PDF 圖片 XObject 定位與跨頁重複偵測、Office 頁首/母片圖片、上傳樣本感知雜湊比對、刪除並清理 | ✅ |
 | M7 | 預覽強化 | PDF 高亮 + 處理前/後對照；docx/xlsx/pptx 視覺化預覽 | ⬜ |
 | M8 | 信任與批次 | 輸出驗證（殘留 0）、稽核報告 JSON/CSV、多檔 ZIP、設定匯出/匯入 | ⬜ |
 | M9 | 強化與發佈 | Playwright E2E（含「零網路請求」）、Web Worker、加密/舊格式/損毀檔訊息、中英切換、`release/EraserPanda.html` | ⬜ |
@@ -127,3 +127,10 @@ interface FormatHandler {
 - [x] 註解外觀串流（AP）文字偵測：自訂圖章、浮水印註解
 - [x] 測試：合成 PDF（TJ 字距拆字、' 與 " 運算子、Tc/Tz、Artifact 浮水印、跨頁共用 Form、inline image、註解保留）、LibreOffice 與 reportlab 真實輸出（pypdf strict 解析、文字抽取確認）
 - 已知限制：**轉成向量外框的文字**（例如 LibreOffice 匯出的藝術字浮水印、「文字轉外框」）不是文字，無法偵測；Identity-H 字型缺 ToUnicode 時無法辨識（會警示）；直書字型補位為近似值；inline image 資料中剛好出現「空白 EI 空白」的極端情況
+
+### M6 Logo
+- [x] `core/image.ts`：PNG 編 / 解碼（不需 canvas，測試可用）、**dHash 感知雜湊 + 長寬比**（縮放、重新壓縮後仍可比對；透明背景先合成白底）、縮圖
+- [x] PDF（`pdf/images.ts`）：圖片 XObject 解碼（Flate / ASCII85 等鏈、PNG predictor、RGB / Gray / CMYK / ICC / Indexed、1-bit、SMask 透明；JPEG 交給瀏覽器）；啟發式：**同一圖片出現在 2+ 頁（含共用 Form）→ 高**、頁首頁尾帶 → 中、封面頂部 → 低（不預選）、符合樣本 → 高；忽略整頁圖（掃描 / 背景）與極小圖；移除＝刪除所有 `Do` / inline image 指令 + 移除資源參照 → GC 連圖片資料一起清掉（測試確認輸出不再有 `/Subtype /Image`）
+- [x] Office（`ooxml/images.ts`）：Word 頁首頁尾圖片與**圖片浮水印**、PowerPoint 母片 / 版面配置圖片與 2+ 張投影片重複的圖片、Excel 2+ 工作表重複圖片與**頁首頁尾圖片（`&G` + legacyDrawingHF VML）**；**依內容（bytes 雜湊）分組**（openpyxl / Office 會把同一 Logo 存成多個檔）；移除圖形元素（含 mc:AlternateContent）後清理無引用的 rels 與 media；一般圖片不誤判（測試）
+- [x] UI：「Logo / 圖片」群組、縮圖、設定中**上傳 Logo 樣本**（瀏覽器計算雜湊，存 localStorage）、`ScanContext.decodeImage` 注入瀏覽器 JPEG 解碼
+- 已知限制：EMF / WMF（Office 常見向量 Logo）無法產生縮圖或雜湊，只能靠位置啟發式；PDF 中以向量路徑繪製的 Logo 無法偵測
