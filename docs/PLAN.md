@@ -58,7 +58,7 @@ interface FormatHandler {
 | M0 | 專案骨架 | 需求/計畫/交接文件、Vite+TS+Preact、單檔 HTML 打包、CSP、拖曳區、CI | ✅ |
 | M1 | 比對核心 | 預設關鍵字庫、正規化、整字/regex、跨片段映射、穩定 ID | ✅ |
 | M2 | OOXML 引擎 | docx/xlsx/pptx 全 part 文字掃描與刪除（含頁首頁尾、浮水印、文字方塊、註解、母片、圖表、Excel 頁首頁尾代碼與公式）；core/app/custom props、MSIP、LabelInfo、customXml；rels/Content_Types 清理 | ✅ |
-| M3 | UI v1（Office 可用） | 檔案清單、發現清單（依類型/位置分組、勾選例外、一鍵全刪、只取消內文）、文字片段預覽、下載 `_clean` 檔 | ⬜ |
+| M3 | UI v1（Office 可用） | 檔案清單、發現清單（依類型/位置分組、勾選例外、一鍵全刪、只取消內文）、文字片段預覽、下載 `_clean` 檔 | ✅ |
 | M4 | PDF 基礎 | pdf-lib 載入、Info/XMP/MSIP 移除、圖章/註解/書籤/表單、孤兒物件 GC、pdf.js 頁面預覽 | ⬜ |
 | M5 | PDF 內文刪除 | 內容串流 lexer/直譯器、字型解碼（ToUnicode、WinAnsi/Differences、CID）、命中字形移除 + 字寬補位、Form XObject、Watermark Artifact、座標 → 預覽高亮 | ⬜ |
 | M6 | Logo | PDF 圖片 XObject 定位與跨頁重複偵測、Office 頁首/母片圖片、上傳樣本感知雜湊比對、刪除並清理 | ⬜ |
@@ -95,3 +95,14 @@ interface FormatHandler {
 - [x] `core/segments.ts` 加入 `tidyRange()`：刪除後整理空白、分隔符號、括號、中文標點（`Restricted | Internal Use Only | Page 1` → `Page 1`）
 - [x] 樣本產生器 `scripts/make_fixtures.py`（`npm run fixtures`）+ 測試：穩定 ID、清理後殘留 0、未選取時 bytes 完全相同、例外保留、python-docx/openpyxl/python-pptx 可開啟；另以 LibreOffice 轉 PDF 人工確認可開且標籤消失
 - 已知缺口（之後處理）：Excel 工作表層級 customPr（二進位）、Word 欄位代碼 `instrText` 內的字串、註解作者 / people.xml 身分資訊、MIP 內容標記圖形（MSIPCMContentMarking）目前只刪文字不刪圖形、超大 xlsx 的 DOM 記憶體用量
+
+### M3 UI v1（Office + 純文字可用）
+- [x] 首頁：拖曳區 + 四步驟說明 + 責任聲明；工作區：左側檔案清單（狀態 / 發現數 / 移除）、右側發現面板
+- [x] 發現依位置分組（敏感度標籤 / 浮水印 / 頁首頁尾母片 / 內文 / 其他 / 文件屬性 / 僅提示），群組三態勾選、上下文高亮、位置、信心度與說明標籤
+- [x] 一鍵清除並下載 `*_clean.*`；全選 / 全不選 / **保留內文語句**；篩選；例外以刪除線虛框顯示
+- [x] 清除後自動重新掃描輸出檔 →「驗證殘留 N」（M8 會再加原始 bytes 層級的驗證）
+- [x] 多檔「全部清除並下載 ZIP」
+- [x] 關鍵字設定：內建字庫依語言開關、個別停用、自訂字眼（公司名 / 專案代號）、自訂 regex（即時驗證）；存 localStorage（失敗時退回預設）；變更後自動重新掃描
+- [x] 純文字 handler（txt / csv / md）：逐行比對、保留換行與 BOM；Big5 / GB18030 / Shift_JIS 解碼（輸出改 UTF-8 BOM 並提示）
+- [x] E2E（file://）：舊格式訊息、docx 發現、例外保留、下載內容驗證、殘留 0、自訂字眼、ZIP、手機寬度無水平捲動、零網路、零 console error
+- 暫時：PDF 顯示「開發中」（M4/M5 實作）
