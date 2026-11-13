@@ -100,8 +100,9 @@ describe('matchSegments / cutPieces', () => {
       { seg: 0, start: 0, end: 8 },
       { seg: 1, start: 0, end: 5 },
       { seg: 2, start: 0, end: 7 },
+      { seg: 3, start: 0, end: 3 }, // the following " — " separator is absorbed so the footer reads "page 1"
     ]);
-    expect(cutPieces(segs.map((s) => s.text), hit!.pieces)).toEqual(['', '', '', ' — page 1']);
+    expect(cutPieces(segs.map((s) => s.text), hit!.pieces)).toEqual(['', '', '', 'page 1']);
     expect(hit!.wholeUnit).toBe(false);
   });
 
@@ -124,6 +125,30 @@ describe('matchSegments / cutPieces', () => {
 
   it('cuts multiple pieces in one segment', () => {
     expect(cutPieces(['a SECRET b SECRET c'], [{ seg: 0, start: 2, end: 8 }, { seg: 0, start: 11, end: 17 }])).toEqual(['a  b  c']);
+  });
+});
+
+describe('tidyRange', () => {
+  const clean = (s: string) => {
+    const hits = matchSegments([{ text: s }], defaults);
+    return cutPieces([s], hits.flatMap((h) => h.pieces))[0];
+  };
+  it.each([
+    ['a SECRET b', 'a b'],
+    ['SECRET b', 'b'],
+    ['a SECRET', 'a'],
+    ['This deck is confidential. Growth', 'This deck is. Growth'],
+    ['Budget (Internal Use Only)', 'Budget'],
+    ['Budget (Secret) total', 'Budget total'],
+    ['Restricted | Internal Use Only | Page 1', 'Page 1'],
+    ['Quarterly numbers - Highly Sensitive', 'Quarterly numbers'],
+    ['A | Secret | B', 'A | B'],
+    ['本文件為公司機密文件，請勿外傳。', '本文件為。'],
+    ['【機密】會議紀錄', '會議紀錄'],
+    ['Confidential', ''],
+    ['Secret, Confidential', ''],
+  ])('%s → %s', (input, expected) => {
+    expect(clean(input)).toBe(expected);
   });
 });
 
