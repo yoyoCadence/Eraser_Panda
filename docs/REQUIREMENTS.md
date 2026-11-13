@@ -100,3 +100,32 @@
 - 一鍵刪除後輸出 `*_clean.*`，原檔不變；輸出檔可被 Office / Acrobat 無錯誤開啟。
 - 輸出檔的驗證掃描顯示殘留 0（被標記為例外者除外）。
 - 全程無任何網路請求（以 CSP + E2E 測試驗證）。
+
+## 5. v1.0.0 實作對照
+
+| 需求 | 狀態 | 說明 |
+|---|---|---|
+| U1 格式 | ✅ | PDF、DOCX/DOCM、XLSX/XLSM、PPTX/PPTM、TXT/CSV/MD |
+| U2 字眼 | ✅ | 中英日韓預設字庫 + 自訂字眼 / regex |
+| U3 Logo | ✅ | 跨頁重複、頁首頁尾 / 母片、Logo 樣本感知雜湊 |
+| U4 位置與預覽 | ✅ | PDF 視覺預覽 + 高亮；Office / 文字結構化預覽；📍 雙向定位 |
+| U5 一鍵全刪 / 例外 | ✅ | 預設全選、逐項 / 群組取消、「保留內文語句」 |
+| U6 Excel 自訂屬性 | ✅ | 所有 Office 格式的 custom.xml（含 MSIP）；Excel 工作表層級 customPr 為 backlog |
+| U7–U9 單檔 HTML、拖曳、另存新檔 | ✅ | `release/EraserPanda.html`、整個視窗可拖放、`*_clean.*` |
+| U10 簡單直覺 | ✅ | 四步驟首頁、分組清單、一鍵按鈕 |
+| I1 metadata | ✅ | |
+| I2 隱藏位置 | ✅ | 欄位代碼、追蹤修訂、樞紐快取、圖表快取、內嵌活頁簿皆含 |
+| I3–I4 跨片段 / 正規化 | ✅ | |
+| I5 字庫 / 匯出匯入 | ✅ | |
+| I6 Logo 三策略 | ✅ | |
+| I7–I8 真刪除 / 無殘留 | ✅ | PDF 字形移除 + GC；Office rels / media 清理；原始位元組驗證 |
+| I9 可開啟 | ✅ | python-docx / openpyxl / python-pptx / pypdf strict / LibreOffice 驗證 |
+| I10 版面不變 | ✅ | PDF 字寬補位誤差 < 0.01pt |
+| I11 欄位 | ✅ | 欄位結果被改動時 unlink |
+| I12 驗證 | ✅ | 重新掃描 + 原始位元組 |
+| I13 本機 | ✅ | CSP + E2E 零網路 |
+| I14 報告 | ✅ | CSV / JSON + SHA-256，不含文件內容 |
+| I15–I19 UX | ✅ | 批次 ZIP、位置 / 信心標示、前後對照（PDF）、進度、錯誤訊息 |
+| I20 中英切換 | ⏸ | 決策：暫不做（見 PLAN） |
+| I21–I22 範圍 | ✅ | |
+| I23–I25 工程 | ✅ | 97 單元測試 + 27 項 E2E、CI、交接文件、寬鬆授權 |

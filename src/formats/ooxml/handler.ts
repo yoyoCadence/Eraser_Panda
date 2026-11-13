@@ -5,7 +5,7 @@ import type { FormatHandler, FormatId, PreviewBlock, ScanContext, ScanResult } f
 import { collectDocx } from './docx';
 import { collectChart, collectDmlParagraphs } from './drawingml';
 import { scanOoxmlImages } from './images';
-import { scanMetadata } from './metadata';
+import { scanAuthors, scanMetadata } from './metadata';
 import { OoxmlPackage } from './package';
 import { collectPptx } from './pptx';
 import { applyCandidates, unitCandidates, type Candidate, type TextUnit } from './units';
@@ -57,6 +57,7 @@ async function collect(pkg: OoxmlPackage, format: OoxmlFormat, compiled: Compile
     ...prefixed(extra, prefix),
     ...(await scanOoxmlImages(pkg, format, ctx, prefix)),
     ...prefixed(meta.candidates, prefix),
+    ...prefixed(scanAuthors(pkg), prefix),
   ];
 
   // ---- embedded Office files (chart data workbooks, embedded documents) — processed recursively ----

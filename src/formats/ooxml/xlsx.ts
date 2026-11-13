@@ -2,11 +2,61 @@ import { findHits, type CompiledRules } from '../../core/matcher';
 import type { Segment } from '../../core/segments';
 import { chartsOf, collectChart, collectDmlParagraphs } from './drawingml';
 import { markDirtyOnWrite } from './metadata';
-import type { OoxmlPackage } from './package';
+import type { Fragment, OoxmlPackage } from './package';
 import { attrUnit, elementUnit, type Candidate, type SegRef, type TextUnit } from './units';
 import { NS, childEls, els, firstChildEl } from './xml';
 
 const REL_DOC = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument';
+
+/** `<c …>…</c>` or `<c …/>` — attributes in group 1, body in group 2. */
+const CELL_RE = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+
+const decodeXml = (s: string) =>
+  s
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+
+export const HF_RE = /<headerFooter\b[^>]*?(?:\/>|>[\s\S]*?<\/headerFooter>)/;
+
+/** Text a cell carries itself (inline string, formula literals, cached string result) — cheap pre-check. */
+function cellLocalText(attrs: string, body: string): string {
+  const parts: string[] = [];
+  const is = /<is>([\s\S]*?)<\/is>/.exec(body);
+  if (is) parts.push(decodeXml(is[1]!));
+  const f = /<f\b[^>]*>([^<]*)<\/f>/.exec(body);
+  if (f && (f[1]!.includes('&quot;') || f[1]!.includes('"'))) parts.push(decodeXml(f[1]!));
+  if (/\bt="str"/.test(attrs)) {
+    const v = /<v>([^<]*)<\/v>/.exec(body);
+    if (v) parts.push(decodeXml(v[1]!));
+  }
+  return parts.join('\n');
+}
+
+/** Header/footer text without formatting codes — cheap pre-check. */
+function hfPlainText(xml: string): string {
+  return decodeXml(xml)
+    .replace(/&&/g, '\u0000')
+    .replace(/&"[^"]*"|&K[0-9A-Fa-f+\-S]{0,6}|&\d+|&[A-Z]/g, ' ')
+    .replace(/\u0000/g, '&');
+}
+
+/** Like markDirtyOnWrite, for units living in a fragment of a huge part. */
+function touchOnWrite(frag: Fragment, unit: TextUnit): TextUnit {
+  const prev = unit.afterWrite;
+  return {
+    ...unit,
+    afterWrite: (changed) => {
+      if (changed.length) frag.touch();
+      prev?.(changed);
+    },
+  };
+}
 
 interface SheetInfo {
   name: string;
@@ -40,47 +90,60 @@ export function collectXlsx(pkg: OoxmlPackage, compiled: CompiledRules): { units
   const ssFirstSheet = new Map<number, number>();
 
   for (const sh of sheetList) {
-    const doc = pkg.xml(sh.path);
-    if (!doc) continue;
+    const xml = pkg.text(sh.path) ?? '';
     const label = (ref: string) => `${sh.name}!${ref}`;
 
-    for (const c of els(doc, NS.s, 'c')) {
+    // Shared-string references are collected with a regex: worksheets can hold millions of cells and a DOM of
+    // them does not fit in memory. The DOM is only built when the sheet itself contains a hit (below).
+    for (const m of xml.matchAll(CELL_RE)) {
+      const attrs = m[1]!;
+      if (!/\bt="s"/.test(attrs)) continue;
+      const idx = Number(/<v>(\d+)<\/v>/.exec(m[2] ?? '')?.[1]);
+      if (!Number.isInteger(idx)) continue;
+      const ref = /\br="([A-Z]+\d+)"/.exec(attrs)?.[1] ?? '?';
+      const list = ssRefs.get(idx);
+      if (list) list.push(label(ref));
+      else {
+        ssRefs.set(idx, [label(ref)]);
+        ssFirstSheet.set(idx, sh.index);
+      }
+    }
+
+    // Cells with text of their own (inline strings, formulas, cached string results) are parsed one by one as tiny
+    // fragments — only when they contain a hit. The worksheet itself is never parsed as a whole.
+    for (const m of xml.matchAll(CELL_RE)) {
+      const attrs = m[1]!;
+      const body = m[2] ?? '';
+      if (!body || !findHits(cellLocalText(attrs, body), compiled).length) continue;
+      const frag = pkg.fragment(sh.path, m.index!, m.index! + m[0].length);
+      const c = frag.el;
       const ref = c.getAttribute('r') ?? '?';
       const t = c.getAttribute('t');
-      if (t === 's') {
-        const idx = Number(firstChildEl(c, NS.s, 'v')?.textContent);
-        if (Number.isInteger(idx)) {
-          const list = ssRefs.get(idx);
-          if (list) list.push(label(ref));
-          else {
-            ssRefs.set(idx, [label(ref)]);
-            ssFirstSheet.set(idx, sh.index);
-          }
-        }
-      } else if (t === 'inlineStr') {
+      if (t === 'inlineStr') {
         const is = firstChildEl(c, NS.s, 'is');
-        if (is) units.push(markDirtyOnWrite(pkg, sh.path, richTextUnit(is, { part: sh.path, key: `is:${ref}`, location: 'body', where: label(ref), page: sh.index })));
+        if (is) units.push(touchOnWrite(frag, richTextUnit(is, { part: sh.path, key: `is:${ref}`, location: 'body', where: label(ref), page: sh.index })));
       }
       const f = firstChildEl(c, NS.s, 'f');
       if (f?.textContent?.includes('"')) {
-        const u = formulaUnit(pkg, sh.path, f, { key: `f:${ref}`, where: `${label(ref)} 公式`, page: sh.index });
+        const u = formulaUnit(frag.touch, sh.path, f, { key: `f:${ref}`, where: `${label(ref)} 公式`, page: sh.index });
         if (u) units.push(u);
       }
       if (t === 'str') {
         // cached result of a string formula — would keep showing the label until Excel recalculates
         const v = firstChildEl(c, NS.s, 'v');
-        if (v?.textContent) units.push(markDirtyOnWrite(pkg, sh.path, elementUnit(v, { part: sh.path, key: `v:${ref}`, location: 'formula', where: `${label(ref)} 公式結果`, page: sh.index })));
+        if (v?.textContent) units.push(touchOnWrite(frag, elementUnit(v, { part: sh.path, key: `v:${ref}`, location: 'formula', where: `${label(ref)} 公式結果`, page: sh.index })));
       }
     }
 
     // ---- header / footer ----
-    const hf = els(doc, NS.s, 'headerFooter')[0];
-    if (hf) {
-      for (const el of childEls(hf, NS.s)) {
+    const hfMatch = HF_RE.exec(xml);
+    if (hfMatch && findHits(hfPlainText(hfMatch[0]), compiled).length) {
+      const frag = pkg.fragment(sh.path, hfMatch.index, hfMatch.index + hfMatch[0].length);
+      for (const el of childEls(frag.el, NS.s)) {
         if (!el.textContent) continue;
         const isHeader = /Header$/.test(el.localName);
         const variant = el.localName.startsWith('first') ? '首頁' : el.localName.startsWith('even') ? '偶數頁' : '';
-        units.push(headerFooterUnit(pkg, sh.path, el, { key: `hf:${el.localName}`, location: isHeader ? 'header' : 'footer', where: `${sh.name}・${variant}${isHeader ? '頁首' : '頁尾'}`, page: sh.index }));
+        units.push(headerFooterUnit(frag.touch, sh.path, el, { key: `hf:${el.localName}`, location: isHeader ? 'header' : 'footer', where: `${sh.name}・${variant}${isHeader ? '頁首' : '頁尾'}`, page: sh.index }));
       }
     }
 
@@ -232,7 +295,7 @@ function scanQuoted(s: string, start: number, q: string): number {
   return s.length;
 }
 
-function formulaUnit(pkg: OoxmlPackage, path: string, f: Element, base: { key: string; where: string; page: number }): TextUnit | null {
+function formulaUnit(touch: () => void, path: string, f: Element, base: { key: string; where: string; page: number }): TextUnit | null {
   const tokens = tokenizeFormula(f.textContent ?? '');
   const segments: Segment[] = [];
   const refs: SegRef[] = [];
@@ -264,7 +327,7 @@ function formulaUnit(pkg: OoxmlPackage, path: string, f: Element, base: { key: s
         tok.raw = `"${t.replace(/"/g, '""')}"`;
       });
       f.textContent = tokens.map((t) => t.raw).join('');
-      pkg.markDirty(path);
+      touch();
     },
   };
 }
@@ -329,7 +392,7 @@ export function tokenizeHeaderFooter(s: string): HfToken[] {
   return out;
 }
 
-function headerFooterUnit(pkg: OoxmlPackage, path: string, el: Element, base: { key: string; location: 'header' | 'footer'; where: string; page: number }): TextUnit {
+function headerFooterUnit(touch: () => void, path: string, el: Element, base: { key: string; location: 'header' | 'footer'; where: string; page: number }): TextUnit {
   const tokens = tokenizeHeaderFooter(el.textContent ?? '');
   const segments: Segment[] = tokens.map((t) => (t.code ? { text: t.section ? '\n' : '', virtual: true } : { text: t.text }));
   return {
@@ -342,7 +405,7 @@ function headerFooterUnit(pkg: OoxmlPackage, path: string, el: Element, base: { 
     refs: tokens.map(() => null),
     write: (newTexts) => {
       el.textContent = tokens.map((t, i) => (t.code ? t.raw : newTexts[i]!.replace(/&/g, '&&'))).join('');
-      pkg.markDirty(path);
+      touch();
     },
   };
 }

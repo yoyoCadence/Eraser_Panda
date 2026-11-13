@@ -825,6 +825,17 @@ dialog.confirm p {
   margin: 0;
 }
 
+.appfoot {
+  padding: 12px 20px 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.appfoot a {
+  color: inherit;
+}
+
 /* ---------- settings dialog ---------- */
 dialog.settings {
   width: min(640px, calc(100vw - 32px));

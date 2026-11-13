@@ -4,7 +4,7 @@ import type { LocationKind, ScanContext } from '../../core/types';
 import { OoxmlPackage } from './package';
 import { partNumber } from './units';
 import { NS, closest, els, removeEl } from './xml';
-import { tokenizeHeaderFooter } from './xlsx';
+import { HF_RE, tokenizeHeaderFooter } from './xlsx';
 
 type Format = 'docx' | 'xlsx' | 'pptx';
 
@@ -194,13 +194,14 @@ export function pruneRels(pkg: OoxmlPackage, part: string): void {
 function headerFooterImages(pkg: OoxmlPackage, _ctx: ScanContext, idPrefix: string): Candidate[] {
   const out: Candidate[] = [];
   for (const sheet of pkg.paths.filter((p) => (pkg.contentType(p) ?? '').endsWith('spreadsheetml.worksheet+xml'))) {
-    const doc = pkg.xml(sheet);
-    const hfEl = doc && els(doc, NS.s, 'legacyDrawingHF')[0];
-    if (!doc || !hfEl) continue;
-    const rId = hfEl.getAttributeNS(NS.r, 'id') ?? '';
+    // worksheets are never parsed as a whole (they can be huge) — locate the two elements by text
+    const xml = pkg.text(sheet) ?? '';
+    const ld = /<legacyDrawingHF\b[^>]*?(?:\/>|>[\s\S]*?<\/legacyDrawingHF>)/.exec(xml);
+    if (!ld) continue;
+    const rId = /\br:id="([^"]+)"/.exec(ld[0])?.[1] ?? /\bid="([^"]+)"/.exec(ld[0])?.[1] ?? '';
     const vml = pkg.relTarget(sheet, rId);
     const media = vml ? pkg.rels(vml).filter((r) => /\/image$/.test(r.type)).map((r) => r.target) : [];
-    const hf = els(doc, NS.s, 'headerFooter')[0];
+    const hfMatch = HF_RE.exec(xml);
     out.push({
       finding: {
         id: `${idPrefix}${sheet}#hfimage`,
@@ -210,16 +211,20 @@ function headerFooterImages(pkg: OoxmlPackage, _ctx: ScanContext, idPrefix: stri
         context: { before: '', match: '頁首 / 頁尾圖片', after: media.length ? ` ${media.map((m) => m.slice(m.lastIndexOf('/') + 1)).join('、')}` : '' },
         where: `${sheet.slice(sheet.lastIndexOf('/') + 1)}・頁首頁尾`,
         part: sheet,
-        thumbnail: undefined,
         confidence: 'high',
         removable: true,
         defaultSelected: true,
         note: 'Excel 頁首 / 頁尾中的圖片幾乎都是公司 Logo；將移除 &G 圖片代碼與對應圖片',
       },
       remove: () => {
-        if (hf) for (const el of Array.from(hf.children)) el.textContent = tokenizeHeaderFooter(el.textContent ?? '').map((t) => (t.code ? (t.raw === '&G' ? '' : t.raw) : t.text.replace(/&/g, '&&'))).join('');
-        removeEl(hfEl);
-        pkg.markDirty(sheet);
+        if (hfMatch) {
+          const frag = pkg.fragment(sheet, hfMatch.index, hfMatch.index + hfMatch[0].length);
+          for (const el of Array.from(frag.el.children)) {
+            el.textContent = tokenizeHeaderFooter(el.textContent ?? '').map((t) => (t.code ? (t.raw === '&G' ? '' : t.raw) : t.text.replace(/&/g, '&&'))).join('');
+          }
+          frag.touch();
+        }
+        pkg.removeText(sheet, ld.index, ld.index + ld[0].length);
         if (vml) {
           pkg.removeRel(sheet, rId);
           if (!pkg.isReferenced(vml)) pkg.removePart(vml);

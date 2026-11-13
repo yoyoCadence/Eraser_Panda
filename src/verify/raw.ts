@@ -23,8 +23,20 @@ export function rawScan(format: FormatId, bytes: Uint8Array, compiled: CompiledR
   const chunks = format === 'pdf' ? pdfChunks(bytes) : format === 'text' ? [{ where: '檔案', text: new TextDecoder().decode(bytes) }] : zipChunks(bytes);
   const out: RawHit[] = [];
   for (const c of chunks) {
-    for (const h of findHits(c.text, compiled)) {
-      out.push({ where: c.where, text: h.text, context: c.text.slice(Math.max(0, h.start - 30), h.end + 30).replace(/\s+/g, ' ') });
+    // scan huge parts (multi-MB worksheets / streams) in overlapping windows to bound memory
+    const WIN = 1 << 20;
+    const OVERLAP = 512;
+    const seen = new Set<number>();
+    for (let off = 0; off < c.text.length; off += WIN - OVERLAP) {
+      const win = c.text.slice(off, off + WIN);
+      for (const h of findHits(win, compiled)) {
+        const abs = off + h.start;
+        if (seen.has(abs)) continue;
+        seen.add(abs);
+        out.push({ where: c.where, text: h.text, context: win.slice(Math.max(0, h.start - 30), h.end + 30).replace(/\s+/g, ' ') });
+        if (out.length >= 500) return out;
+      }
+      if (off + WIN >= c.text.length) break;
     }
   }
   return out;
