@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { DEFAULT_RULES } from '../core/rules';
 import { dataUrl, logoHash, pngEncode, thumbnail } from '../core/image';
-import { LANG_LABEL, parseList, type LangKey, type Settings } from '../core/settings';
+import { LANG_LABEL, parseList, sanitizeSettings, type LangKey, type Settings } from '../core/settings';
+import { download } from './engine';
 import { bitmapPixels } from './imageDecode';
 
 interface Props {
@@ -142,8 +143,42 @@ export function SettingsDialog({ open, settings, onClose, onSave }: Props) {
           {regexError && <p class="error">{regexError}</p>}
         </fieldset>
 
-        <p class="muted small">設定只儲存在這台電腦的瀏覽器中。</p>
+        <p class="muted small">設定只儲存在這台電腦的瀏覽器中。可匯出成檔案分享給同事，對方匯入後即使用相同規則。</p>
         <div class="dialog-actions">
+          <button
+            type="button"
+            class="left"
+            onClick={() => {
+              const s = { ...draft, customWords: parseList(words, true), customRegex: parseList(regex, false) };
+              download('eraser-panda-settings.json', new TextEncoder().encode(JSON.stringify(s, null, 2)), 'application/json');
+            }}
+          >
+            匯出設定
+          </button>
+          <label class="button-like">
+            匯入設定
+            <input
+              type="file"
+              accept="application/json,.json"
+              hidden
+              data-testid="settings-import"
+              onChange={async (e) => {
+                const f = e.currentTarget.files?.[0];
+                e.currentTarget.value = '';
+                if (!f) return;
+                try {
+                  const s = sanitizeSettings(JSON.parse(await f.text()));
+                  setDraft(s);
+                  setWords(s.customWords.join('\n'));
+                  setRegex(s.customRegex.join('\n'));
+                  setLogoError('');
+                } catch {
+                  setLogoError('匯入失敗：不是有效的設定檔（JSON）。');
+                }
+              }}
+            />
+          </label>
+          <span class="spacer" />
           <button type="button" onClick={onClose}>
             取消
           </button>

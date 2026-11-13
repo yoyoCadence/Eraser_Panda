@@ -60,7 +60,11 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   // ---- mark one exception (the header label), then clean ----
   const headerRow = page.locator('[data-group="hf"] li', { hasText: '頁首 1' }).first();
   await headerRow.locator('input[type=checkbox]').uncheck();
-  const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('clean-one').click()]);
+  await page.getByTestId('clean-one').click();
+  await page.getByTestId('confirm-dialog').waitFor();
+  check('first clean asks for confirmation', await page.getByTestId('confirm-dialog').isVisible());
+  await page.getByTestId('confirm-dialog').locator('input[type=checkbox]').check();
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('confirm-ok').click()]);
   check('download is named *_clean.docx', download.suggestedFilename() === 'sample_clean.docx', download.suggestedFilename());
   const out = fs.readFileSync(await download.path());
   const parts = unzipSync(new Uint8Array(out));
@@ -74,7 +78,11 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   check('body label removed', !strFromU8(parts['word/document.xml']).includes('STRICTLY'));
   await page.getByTestId('clean-result').waitFor();
   const resultText = await page.getByTestId('clean-result').innerText();
-  check('verification reports 0 residual', /驗證殘留\s*0/.test(resultText), resultText);
+  check('verification reports 0 residual', /重新掃描殘留\s*0/.test(resultText), resultText);
+  check('raw residual shown (exception kept → expected)', /原始位元組殘留\s*\d/.test(resultText), resultText);
+  const [reportDl] = await Promise.all([page.waitForEvent('download'), page.getByTestId('report-csv').click()]);
+  const csv = fs.readFileSync(await reportDl.path(), 'utf8');
+  check('audit report lists removed + kept items without document content', csv.includes('已移除') && csv.includes('保留（例外）') && !csv.includes('information about the plan'), csv.slice(0, 200));
   if (shots) await page.screenshot({ path: path.join(shots, '3-cleaned.png'), fullPage: true });
 
   // ---- custom keyword + logo sample trigger a re-scan ----

@@ -783,6 +783,48 @@ img.thumb {
   font-size: 12px;
 }
 
+.report-box {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.report-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.raw-details {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.raw-details ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.button-like {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 6px 12px;
+}
+
+dialog.confirm p {
+  margin: 0;
+}
+
 /* ---------- settings dialog ---------- */
 dialog.settings {
   width: min(640px, calc(100vw - 32px));
@@ -865,7 +907,9 @@ textarea {
 
 .dialog-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  align-items: center;
   gap: 8px;
 }
 

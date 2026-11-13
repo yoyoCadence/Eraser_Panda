@@ -104,17 +104,7 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
             <input class="filter" type="search" placeholder="篩選…" value={filter} onInput={(e) => setFilter(e.currentTarget.value)} aria-label="篩選發現項目" />
           </div>
 
-          {doc.output && (
-            <div class={`result ${doc.output.residual ? 'bad' : 'good'}`} data-testid="clean-result">
-              <span>
-                {doc.output.residual === 0 ? '✅' : '⚠️'} 已產生 <b>{doc.output.name}</b>：移除 {doc.output.removed} 項
-                {doc.output.kept > 0 && `、保留例外 ${doc.output.kept} 項`}・驗證殘留 <b>{doc.output.residual}</b>
-              </span>
-              <button type="button" class="link" onClick={onDownloadAgain}>
-                再次下載
-              </button>
-            </div>
-          )}
+          {doc.output && <CleanResult output={doc.output} onDownloadAgain={onDownloadAgain} />}
 
           <div class={hasPreview ? 'split' : ''}>
           <div class="groups">
@@ -203,6 +193,39 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
         </>
       )}
     </section>
+  );
+}
+
+function CleanResult({ output, onDownloadAgain }: { output: NonNullable<DocState['output']>; onDownloadAgain: () => void }) {
+  const rawBad = output.raw.length > 0 && !output.rawExpected;
+  const ok = output.residual === 0 && !rawBad;
+  return (
+    <div class={`result ${ok ? 'good' : 'bad'}`} data-testid="clean-result">
+      <div>
+        <div>
+          {ok ? '✅' : '⚠️'} 已產生 <b>{output.name}</b>：移除 {output.removed} 項{output.kept > 0 && `、保留例外 / 手動項目 ${output.kept} 項`}
+        </div>
+        <div class="small">
+          驗證：重新掃描殘留 <b>{output.residual}</b>・原始位元組殘留 <b data-testid="raw-residual">{output.raw.length}</b>
+          {output.raw.length > 0 && output.rawExpected && '（含你保留的項目）'}
+        </div>
+        {output.raw.length > 0 && (
+          <details class="raw-details">
+            <summary>查看原始位元組中的殘留位置</summary>
+            <ul>
+              {output.raw.slice(0, 50).map((h, i) => (
+                <li key={i}>
+                  <code>{h.where}</code> <mark>{h.text}</mark> <span class="muted">{h.context}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
+      <button type="button" class="link" onClick={onDownloadAgain}>
+        再次下載
+      </button>
+    </div>
   );
 }
 
