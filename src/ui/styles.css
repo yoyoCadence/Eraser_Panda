@@ -714,6 +714,75 @@ img.thumb {
   color: var(--accent);
 }
 
+/* ---------- structured text preview ---------- */
+.text-preview {
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.tp-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 8px 12px 10px;
+}
+
+.tp-block h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.tp-line {
+  margin: 2px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.tp-line mark {
+  background: var(--hl);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+  cursor: pointer;
+  outline: 2px solid #e5a000;
+}
+
+.tp-line mark.kept {
+  background: transparent;
+  outline: 1px dashed var(--muted);
+  text-decoration: line-through dotted;
+}
+
+.tp-line mark.flash {
+  animation: flash 1.2s ease-out 2;
+}
+
+.tp-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 0 5px;
+  margin-right: 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
+  vertical-align: 1px;
+}
+
+.tp-gap {
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+  font-size: 12px;
+}
+
 /* ---------- settings dialog ---------- */
 dialog.settings {
   width: min(640px, calc(100vw - 32px));
@@ -814,7 +883,8 @@ code {
   .preview-col {
     position: static;
   }
-  .pdf-preview {
+  .pdf-preview,
+  .text-preview {
     max-height: 70vh;
   }
 }

@@ -43,6 +43,8 @@ export interface Candidate {
   remove?: () => void;
   /** Set by apply() when this candidate was selected (lets nested packages know they must be re-saved). */
   touched?: boolean;
+  /** Hit position in the unit's joined text (for previews). */
+  span?: { unit: TextUnit; start: number; end: number };
 }
 
 const LABEL_LOCATIONS = new Set<LocationKind>(['header', 'footer', 'watermark', 'master', 'label']);
@@ -74,6 +76,7 @@ export function unitCandidates(units: readonly TextUnit[], compiled: CompiledRul
           note: unit.wholeObject.label,
         },
         remove: unit.wholeObject.remove,
+        span: { unit, start: 0, end: text.length },
       });
       continue;
     }
@@ -97,6 +100,7 @@ export function unitCandidates(units: readonly TextUnit[], compiled: CompiledRul
           note: unit.note ?? (unit.location === 'body' && !h.wholeUnit ? '位於內文語句中，刪除可能改變語意' : undefined),
         },
         cut: { unit, pieces: h.pieces },
+        span: { unit, start: h.start, end: h.end },
       });
     }
   }

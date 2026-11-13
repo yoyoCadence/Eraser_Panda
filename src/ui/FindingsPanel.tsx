@@ -2,6 +2,7 @@ import { useMemo, useState } from 'preact/hooks';
 import type { Finding, LocationKind } from '../core/types';
 import type { DocState } from './engine';
 import { PdfPreview } from './PdfPreview';
+import { TextPreview } from './TextPreview';
 
 interface Group {
   key: string;
@@ -38,7 +39,10 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
   const [focus, setFocus] = useState<{ id: string | null; tick: number }>({ id: null, tick: 0 });
   const [view, setView] = useState<'original' | 'clean'>('original');
   const locate = (id: string) => setFocus((f) => ({ id, tick: f.tick + 1 }));
-  const hasPreview = doc.format === 'pdf' && !!doc.bytes;
+  const isPdf = doc.format === 'pdf' && !!doc.bytes;
+  const blocks = doc.result?.preview ?? [];
+  const hasPreview = isPdf || blocks.length > 0;
+  const previewIds = useMemo(() => new Set(blocks.flatMap((b) => b.lines.flatMap((l) => l.marks.map((m) => m.id)))), [blocks]);
   const previewBytes = view === 'clean' && doc.output ? doc.output.bytes : doc.bytes;
   const removable = useMemo(() => findings.filter((f) => f.removable), [findings]);
   const shown = useMemo(() => {
@@ -146,7 +150,7 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
                         disabled={busy}
                         focused={focus.id === f.id}
                         onToggle={(v) => set([f.id], v)}
-                        onLocate={hasPreview && f.page ? () => (setView('original'), locate(f.id)) : undefined}
+                        onLocate={(isPdf && f.page) || previewIds.has(f.id) ? () => (setView('original'), locate(f.id)) : undefined}
                       />
                     ))}
                   </ul>
@@ -158,7 +162,7 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
             <aside class="preview-col">
               <div class="preview-head">
                 <span class="muted">預覽</span>
-                {doc.output && (
+                {isPdf && doc.output && (
                   <div class="seg" role="tablist">
                     <button type="button" role="tab" aria-selected={view === 'original'} class={view === 'original' ? 'on' : ''} onClick={() => setView('original')}>
                       原始
@@ -169,6 +173,7 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
                   </div>
                 )}
               </div>
+              {isPdf ? (
               <PdfPreview
                 bytes={previewBytes!}
                 findings={view === 'original' ? findings : []}
@@ -180,6 +185,18 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
                   document.querySelector(`[data-finding-id="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }}
               />
+              ) : (
+                <TextPreview
+                  blocks={blocks}
+                  selected={sel}
+                  focusId={focus.id}
+                  focusTick={focus.tick}
+                  onPick={(id) => {
+                    locate(id);
+                    document.querySelector(`[data-finding-id="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }}
+                />
+              )}
             </aside>
           )}
           </div>

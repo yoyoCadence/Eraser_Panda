@@ -84,6 +84,23 @@ export interface ScanResult {
   warnings: string[];
   /** Number of pages / slides / sheets, when known. */
   pageCount?: number;
+  /** Structured text preview (Office / text formats; PDF is previewed visually). */
+  preview?: PreviewBlock[];
+}
+
+/** One section of the structured preview: a slide, a header, a sheet, the body … */
+export interface PreviewBlock {
+  title: string;
+  page?: number;
+  lines: PreviewLine[];
+}
+
+export interface PreviewLine {
+  text: string;
+  /** highlighted ranges, each tied to a finding */
+  marks: Array<{ start: number; end: number; id: string }>;
+  /** location badge, e.g. 頁首 / 浮水印 / 註解 */
+  tag?: string;
 }
 
 export interface Rule {
