@@ -1,5 +1,8 @@
 import { zipSync } from 'fflate';
 import { cleanFileName, detectFormat } from '../core/fileType';
+import { compileRules } from '../core/matcher';
+import { sha256, type ReportFile } from '../core/report';
+import { rawScan, type RawHit } from '../verify/raw';
 import type { FormatId, ScanContext, ScanResult } from '../core/types';
 import { handlerFor } from '../formats';
 
@@ -12,6 +15,11 @@ export interface CleanOutput {
   kept: number;
   /** Findings in the output that were not deliberately kept — should be 0. */
   residual: number;
+  /** Raw-byte hits in the output (independent of the structured scanners). */
+  raw: RawHit[];
+  /** Raw hits are expected because something was kept (exceptions / manual items). */
+  rawExpected: boolean;
+  report: ReportFile;
 }
 
 export interface DocState {
@@ -66,7 +74,26 @@ export async function cleanDoc(doc: DocState, ctx: ScanContext): Promise<CleanOu
   const rescan = await handler.scan(bytes, ctx);
   const kept = doc.result!.findings.length - ids.size;
   const residual = Math.max(0, rescan.findings.length - kept);
-  return { name: cleanFileName(doc.name), bytes, removed: ids.size, kept, residual };
+  const raw = rawScan(doc.format!, bytes, compileRules(ctx.rules));
+  const name = cleanFileName(doc.name);
+  const findings = doc.result!.findings;
+  const report: ReportFile = {
+    file: doc.name,
+    format: doc.format!,
+    outputName: name,
+    processedAt: new Date().toISOString(),
+    sizeIn: doc.bytes!.length,
+    sizeOut: bytes.length,
+    sha256In: await sha256(doc.bytes!),
+    sha256Out: await sha256(bytes),
+    removed: findings.filter((f) => ids.has(f.id)),
+    kept: findings.filter((f) => f.removable && !ids.has(f.id)),
+    manual: findings.filter((f) => !f.removable),
+    warnings: doc.result!.warnings,
+    residual,
+    rawResidual: raw.length,
+  };
+  return { name, bytes, removed: ids.size, kept, residual, raw, rawExpected: kept > 0, report };
 }
 
 export function download(name: string, bytes: Uint8Array, mime = 'application/octet-stream'): void {
