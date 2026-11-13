@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run test && npm run build",
-    "e2e": "node e2e/smoke.cjs"
+    "e2e": "node e2e/smoke.cjs",
+    "fixtures": "python3 scripts/make_fixtures.py"
   },
   "dependencies": {
     "fflate": "^0.8.3",
@@ -21,7 +22,7 @@
     "preact": "^11.2.0"
   },
   "devDependencies": {
-    "happy-dom": "^21.0.4",
+    "jsdom": "^31.0.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
     "vite-plugin-singlefile": "^2.3.4",

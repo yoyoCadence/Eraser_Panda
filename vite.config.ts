@@ -13,7 +13,7 @@ export default defineConfig({
     reportCompressedSize: false,
   },
   test: {
-    environment: 'happy-dom',
+    environment: 'jsdom',
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     testTimeout: 30_000,
   },

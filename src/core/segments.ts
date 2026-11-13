@@ -47,15 +47,73 @@ export function joinSegments(segments: readonly Segment[]): { joined: string; of
   return { joined, offsets };
 }
 
-export function matchSegments(segments: readonly Segment[], compiled: CompiledRules): SegmentHit[] {
+export function matchSegments(segments: readonly Segment[], compiled: CompiledRules, tidy = true): SegmentHit[] {
   const { joined, offsets } = joinSegments(segments);
   const hits = findHits(joined, compiled);
-  return hits.map((h) => ({
-    ...h,
-    pieces: mapToPieces(segments, offsets, h.start, h.end),
-    context: makeContext(joined, h.start, h.end),
-    wholeUnit: isWholeUnit(joined, h.start, h.end),
-  }));
+  let lastEnd = 0;
+  return hits.map((h) => {
+    let [cs, ce] = tidy ? tidyRange(joined, h.start, h.end) : [h.start, h.end];
+    // widened ranges of neighbouring hits must never overlap (a character can only be cut once)
+    cs = Math.max(cs, lastEnd);
+    lastEnd = ce;
+    return {
+      ...h,
+      pieces: mapToPieces(segments, offsets, cs, ce),
+      context: makeContext(joined, h.start, h.end),
+      wholeUnit: isWholeUnit(joined, h.start, h.end),
+    };
+  });
+}
+
+const WS = /[ \t\u00a0\u3000]/;
+const SEP = /[|｜·•\/–—\-,，、;；:：]/;
+const END_PUNCT = /[.,;:!?。、，；：！？]/;
+const OPEN = '([{（【「『《〈';
+const CLOSE = ')]}）】」』》〉';
+
+/**
+ * Widen a removal so the remaining text reads naturally:
+ *   "a SECRET b" → "a b"         "SECRET b" → "b"           "a SECRET" → "a"
+ *   "is secret." → "is."          "Budget (Secret)" → "Budget"
+ *   "Secret | Internal | Page 1" → "Page 1"                   "numbers - Secret" → "numbers"
+ *   "本文件，請勿外傳。" → "本文件。"
+ * Only whitespace, separators and brackets directly around the hit are ever absorbed.
+ */
+export function tidyRange(text: string, start: number, end: number): [number, number] {
+  let ls = start;
+  while (ls > 0 && WS.test(text[ls - 1]!)) ls--;
+  let re = end;
+  while (re < text.length && WS.test(text[re]!)) re++;
+  const L = ls > 0 ? text[ls - 1]! : null;
+  const R = re < text.length ? text[re]! : null;
+  const skipWsRight = (i: number) => {
+    while (i < text.length && WS.test(text[i]!)) i++;
+    return i;
+  };
+  const skipWsLeft = (i: number) => {
+    while (i > 0 && WS.test(text[i - 1]!)) i--;
+    return i;
+  };
+
+  // "(Secret)" → drop the brackets too, plus one space before them
+  if (L !== null && R !== null && OPEN.includes(L) && OPEN.indexOf(L) === CLOSE.indexOf(R)) {
+    const s = ls - 1;
+    const e = re + 1;
+    if (s > 0 && WS.test(text[s - 1]!) && (e >= text.length || WS.test(text[e]!) || END_PUNCT.test(text[e]!))) return [s - 1, e];
+    return [s, e];
+  }
+  // label at the start of a list: "Secret | Page 1", or between separators: "A | Secret | B"
+  if (R !== null && SEP.test(R) && (L === null || SEP.test(L))) return [L === null ? 0 : start, skipWsRight(re + 1)];
+  // label at the end after a separator: "numbers - Secret", "本文件，請勿外傳"
+  if (L !== null && SEP.test(L) && (R === null || END_PUNCT.test(R))) return [skipWsLeft(ls - 1), end];
+  // "is secret." → "is."
+  if (R !== null && END_PUNCT.test(R) && re === end && ls < start) return [ls, end];
+  // plain spaces
+  const before = start === 0 ? null : text[start - 1]!;
+  const after = end >= text.length ? null : text[end]!;
+  if (after !== null && WS.test(after) && (before === null || WS.test(before))) return [start, end + 1];
+  if (after === null && before !== null && WS.test(before)) return [start - 1, end];
+  return [start, end];
 }
 
 function mapToPieces(segments: readonly Segment[], offsets: number[], start: number, end: number): Piece[] {

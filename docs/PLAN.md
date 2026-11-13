@@ -57,7 +57,7 @@ interface FormatHandler {
 |---|--------|------|------|
 | M0 | 專案骨架 | 需求/計畫/交接文件、Vite+TS+Preact、單檔 HTML 打包、CSP、拖曳區、CI | ✅ |
 | M1 | 比對核心 | 預設關鍵字庫、正規化、整字/regex、跨片段映射、穩定 ID | ✅ |
-| M2 | OOXML 引擎 | docx/xlsx/pptx 全 part 文字掃描與刪除（含頁首頁尾、浮水印、文字方塊、註解、母片、圖表、Excel 頁首頁尾代碼與公式）；core/app/custom props、MSIP、LabelInfo、customXml；rels/Content_Types 清理 | ⬜ |
+| M2 | OOXML 引擎 | docx/xlsx/pptx 全 part 文字掃描與刪除（含頁首頁尾、浮水印、文字方塊、註解、母片、圖表、Excel 頁首頁尾代碼與公式）；core/app/custom props、MSIP、LabelInfo、customXml；rels/Content_Types 清理 | ✅ |
 | M3 | UI v1（Office 可用） | 檔案清單、發現清單（依類型/位置分組、勾選例外、一鍵全刪、只取消內文）、文字片段預覽、下載 `_clean` 檔 | ⬜ |
 | M4 | PDF 基礎 | pdf-lib 載入、Info/XMP/MSIP 移除、圖章/註解/書籤/表單、孤兒物件 GC、pdf.js 頁面預覽 | ⬜ |
 | M5 | PDF 內文刪除 | 內容串流 lexer/直譯器、字型解碼（ToUnicode、WinAnsi/Differences、CID）、命中字形移除 + 字寬補位、Form XObject、Watermark Artifact、座標 → 預覽高亮 | ⬜ |
@@ -82,3 +82,16 @@ interface FormatHandler {
 - [x] `core/matcher.ts`：字面規則 → regex（片語內空白可有可無、CJK 字距空白容忍、整字邊界不含 CJK）；使用者 regex；重疊命中取聯集（最長規則命名）
 - [x] `core/segments.ts`：跨片段比對（Word run / PDF 繪字指令）→ 每片段刪除區間；virtual 片段（推測空白）不參與刪除；上下文片段；`wholeUnit`（整段只有標籤 → 高信心）
 - 已知取捨：英文整字比對下 `time-sensitive` 會命中 `sensitive`（連字號是邊界），交給使用者例外處理
+
+### M2 OOXML 引擎（`src/formats/ooxml/`）
+- [x] `package.ts`：fflate 解壓、延遲解析、**只重寫 dirty part**（其餘 bytes 原封不動，有測試）、rels 解析、`removePart()` 同步清 rels + Content_Types、固定 zip 時間戳（可重現輸出）
+- [x] `units.ts`：TextUnit（一段可比對文字 + 各片段在 XML 的位置）→ Candidate（Finding + 刪除動作）；同一單元的多個刪除一次套用
+- [x] `docx.ts`：內文 / 頁首 / 頁尾 / 註腳 / 章節附註 / 註解 / 建置組塊；跨 run 比對；文字方塊；追蹤修訂刪除文字（`w:delText`）；VML WordArt 浮水印（整個物件移除）；**欄位結果被改動時自動 unlink**（避免 DOCPROPERTY 重新帶回標籤或顯示錯誤）
+- [x] `xlsx.ts`：共用字串（標示 Sheet!A1 位置）、inline 字串、**公式只動字串常值**（不碰 `'Sheet'!A1` 參照）、公式快取結果、頁首頁尾代碼解析（`&L &C &R &"字型" &12 &K &&`）、註解、討論串註解、繪圖文字、圖表、樞紐快取；工作表名稱 **只回報不改名**
+- [x] `pptx.ts`：投影片 / 母片 / 版面配置 / 備忘稿 / 頁尾 placeholder / SmartArt / 註解 / 圖表
+- [x] `drawingml.ts`：通用 a:p 段落、圖表標題與 strCache 快取字串
+- [x] `metadata.ts`：core（標題/主旨/關鍵字/描述/類別/狀態）、**身分資訊**（作者/上次修改者/公司/管理者）、app.xml 其他文字、custom.xml（MSIP_Label_* 依 GUID 合併為一項、分級名稱屬性、命中字眼的屬性；無關屬性保留）、`docMetadata/LabelInfo.xml`、customXml（SharePoint 分級欄位）、**文件縮圖 thumbnail.jpeg**（第一頁截圖會留下標籤與 Logo）
+- [x] `handler.ts`：**內嵌 Office 檔遞迴處理**（例如 PPT 圖表內嵌的 xlsx）；巨集 / OLE 內嵌物件 / Strict OOXML 警告
+- [x] `core/segments.ts` 加入 `tidyRange()`：刪除後整理空白、分隔符號、括號、中文標點（`Restricted | Internal Use Only | Page 1` → `Page 1`）
+- [x] 樣本產生器 `scripts/make_fixtures.py`（`npm run fixtures`）+ 測試：穩定 ID、清理後殘留 0、未選取時 bytes 完全相同、例外保留、python-docx/openpyxl/python-pptx 可開啟；另以 LibreOffice 轉 PDF 人工確認可開且標籤消失
+- 已知缺口（之後處理）：Excel 工作表層級 customPr（二進位）、Word 欄位代碼 `instrText` 內的字串、註解作者 / people.xml 身分資訊、MIP 內容標記圖形（MSIPCMContentMarking）目前只刪文字不刪圖形、超大 xlsx 的 DOM 記憶體用量
