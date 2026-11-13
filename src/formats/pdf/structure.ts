@@ -1,6 +1,7 @@
-import { PDFArray, PDFDict, PDFName, PDFNumber, PDFRef, type PDFDocument, type PDFObject } from 'pdf-lib';
+import { PDFArray, PDFDict, PDFName, PDFNumber, PDFRawStream, PDFRef, type PDFDocument, type PDFObject } from 'pdf-lib';
 import type { Candidate, TextUnit } from '../../core/candidates';
 import { findHits, type CompiledRules } from '../../core/matcher';
+import { formText } from './content/interpret';
 import { lookupArray, lookupDict, nameOf, normRect, pdfText, toPdfString } from './pdfdoc';
 
 /** Standard stamp names (ISO 32000 12.5.6.12) that are classification labels. */
@@ -34,7 +35,18 @@ export function scanAnnotations(doc: PDFDocument, compiled: CompiledRules): Cand
       const texts = ['Contents', 'T', 'Subj', 'RC'].map((k) => pdfText(a.lookup(PDFName.of(k))) ?? '').filter(Boolean);
       const stampName = subtype === 'Stamp' ? nameOf(a.lookup(PDFName.of('Name'))) : undefined;
       const stampLabel = stampName && LABEL_STAMP_ONLY.has(stampName);
-      const hits = texts.flatMap((t) => findHits(t.replace(/<[^>]*>/g, ' '), compiled));
+      let hits = texts.flatMap((t) => findHits(t.replace(/<[^>]*>/g, ' '), compiled));
+      let fromAppearance = false;
+      if (!hits.length && !stampLabel) {
+        // custom stamps / watermark annotations carry their text only in the appearance stream
+        const ap = lookupDict(doc, a.get(PDFName.of('AP')));
+        const normal = ap?.get(PDFName.of('N'));
+        const states = lookupDict(doc, normal);
+        const streams = states && !(doc.context.lookup(normal as PDFRef) instanceof PDFRawStream) ? states.entries().map(([, v]) => v) : normal ? [normal] : [];
+        const apText = streams.map((st) => formText(doc, st)).join(' ');
+        hits = findHits(apText, compiled);
+        fromAppearance = hits.length > 0;
+      }
       const isAttachment = subtype === 'FileAttachment';
       if (!stampLabel && !hits.length && !isAttachment) continue;
 
@@ -46,8 +58,8 @@ export function scanAnnotations(doc: PDFDocument, compiled: CompiledRules): Cand
       out.push({
         finding: {
           id: `p${pi + 1}#annot:${i}`,
-          kind: 'annotation',
-          location: 'annotation',
+          kind: subtype === 'Watermark' ? 'watermark' : 'annotation',
+          location: subtype === 'Watermark' ? 'watermark' : 'annotation',
           ruleId: hits[0]?.ruleId,
           matchText: match,
           context: hits.length ? { before: `${label}註解：`, match: hits[0]!.text, after: snippet.length > 60 ? '…' : '' } : { before: `${label}註解：`, match, after: '' },
@@ -57,7 +69,7 @@ export function scanAnnotations(doc: PDFDocument, compiled: CompiledRules): Cand
           confidence: stampLabel ? 'high' : 'medium',
           removable: true,
           defaultSelected: true,
-          note: isAttachment && !hits.length ? '附件註解可能夾帶含標籤的原始檔，整個註解（含附件）將被移除' : '整個註解將被移除',
+          note: isAttachment && !hits.length ? '附件註解可能夾帶含標籤的原始檔，整個註解（含附件）將被移除' : fromAppearance ? '字眼位於註解的外觀圖形中，整個註解將被移除' : '整個註解將被移除',
         },
         remove: () => removeAnnot(doc, page.node.Annots(), ref, a),
       });

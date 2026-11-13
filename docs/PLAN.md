@@ -60,7 +60,7 @@ interface FormatHandler {
 | M2 | OOXML 引擎 | docx/xlsx/pptx 全 part 文字掃描與刪除（含頁首頁尾、浮水印、文字方塊、註解、母片、圖表、Excel 頁首頁尾代碼與公式）；core/app/custom props、MSIP、LabelInfo、customXml；rels/Content_Types 清理 | ✅ |
 | M3 | UI v1（Office 可用） | 檔案清單、發現清單（依類型/位置分組、勾選例外、一鍵全刪、只取消內文）、文字片段預覽、下載 `_clean` 檔 | ✅ |
 | M4 | PDF 基礎 | pdf-lib 載入、Info/XMP/MSIP 移除、圖章/註解/書籤/表單、孤兒物件 GC、pdf.js 頁面預覽 | ✅ |
-| M5 | PDF 內文刪除 | 內容串流 lexer/直譯器、字型解碼（ToUnicode、WinAnsi/Differences、CID）、命中字形移除 + 字寬補位、Form XObject、Watermark Artifact、座標 → 預覽高亮 | ⬜ |
+| M5 | PDF 內文刪除 | 內容串流 lexer/直譯器、字型解碼（ToUnicode、WinAnsi/Differences、CID）、命中字形移除 + 字寬補位、Form XObject、Watermark Artifact、座標 → 預覽高亮 | ✅ |
 | M6 | Logo | PDF 圖片 XObject 定位與跨頁重複偵測、Office 頁首/母片圖片、上傳樣本感知雜湊比對、刪除並清理 | ⬜ |
 | M7 | 預覽強化 | PDF 高亮 + 處理前/後對照；docx/xlsx/pptx 視覺化預覽 | ⬜ |
 | M8 | 信任與批次 | 輸出驗證（殘留 0）、稽核報告 JSON/CSV、多檔 ZIP、設定匯出/匯入 | ⬜ |
@@ -115,5 +115,15 @@ interface FormatHandler {
 - [x] `render.ts` + `ui/PdfPreview.tsx`：pdf.js worker 以 blob: 內嵌（file:// + CSP 下可用，E2E 驗證實際有畫出像素）；延遲渲染、高亮框、📍定位閃爍、點高亮框反查清單、原始 / 清除後切換
 - [x] `verify/raw.ts`：原始位元組驗證器（PDF 每個串流依 `/Filter` 鏈解碼 Flate / ASCII85 / ASCIIHex；zip 逐 part 含巢狀；XML 實體與 PDF hex / UTF-16 字串展開）——測試證明增量更新殘留的 `CONFIDENTIAL` 在清理後消失
 - [x] 樣本 `scripts/make_pdf_fixtures.py`：office.pdf（LibreOffice 匯出 + MSIP / XMP / 圖章 / 書籤 / 附件）、incremental.pdf、reportlab.pdf（標準字型、斜向浮水印、逐字繪製、CJK CID 字型、重複 Logo）
-- 暫時：掃描結果附警示「頁面上直接繪製的文字將在下一版支援」（M5 完成後移除 `handler.ts` 的 TODO）
+- ~~暫時警示~~（M5 已移除）
 - 已知限制：加密 PDF（含僅有權限密碼者）目前直接拒絕 → M9 評估實作標準安全處理常式解密
+
+### M5 PDF 頁面文字（`src/formats/pdf/content/`）
+- [x] `lexer.ts`：內容串流 → 指令清單（含精確 byte 範圍）；字面 / hex 字串、陣列、字典、名稱 `#xx`、註解、inline image（BI…ID…EI）
+- [x] `fonts.ts`：ToUnicode CMap（bfchar / bfrange 含偏移與陣列 / 連字）、WinAnsi / MacRoman / Standard + `/Differences`（字形名稱、`uniXXXX`、`uXXXX`）、Type0：Identity、UCS2 / UTF16 預定義 CMap、**Big5 / GBK / Shift_JIS / EUC-KR 預定義 CMap 以 TextDecoder 解碼**、內嵌 Encoding CMap（codespace / cid）；字寬：`/Widths`、`/W` `/DW`、Type3 `FontMatrix`、**標準 14 字型 AFM 字寬**（`scripts/gen_std_widths.py` 產生）
+- [x] `interpret.ts`：q/Q、cm、BT/ET、Tf Tc Tw Tz TL Ts Td TD Tm T*、Tj TJ ' "、BDC/BMC/EMC（`/Artifact` Watermark / Header / Footer、OCG 名稱）、Form XObject 遞迴（共用表單只解析一次並記錄出現頁數）、圖片位置（M6 用）；每個字形的使用者空間四邊形
+- [x] `textScan.ts`：依基線把字形串成「視覺行」（跨 BT 區塊、逐字繪製也能接起）、推測空白；位置分類（Artifact → 浮水印 / 頁首頁尾；斜向文字 → 浮水印；上下 10% → 頁首頁尾；共用表單 → 重複內容）；高亮框
+- [x] 重寫：受影響的顯示指令改寫為 `TJ`，被刪字形以**精確字寬（含 Tc / Tw / Tz）位移補位** → 同行後續文字位置不變（測試誤差 < 0.01pt）；其他 bytes 原封不動；頁面內容寫成單一新串流、Form XObject 原地替換並保留字典
+- [x] 註解外觀串流（AP）文字偵測：自訂圖章、浮水印註解
+- [x] 測試：合成 PDF（TJ 字距拆字、' 與 " 運算子、Tc/Tz、Artifact 浮水印、跨頁共用 Form、inline image、註解保留）、LibreOffice 與 reportlab 真實輸出（pypdf strict 解析、文字抽取確認）
+- 已知限制：**轉成向量外框的文字**（例如 LibreOffice 匯出的藝術字浮水印、「文字轉外框」）不是文字，無法偵測；Identity-H 字型缺 ToUnicode 時無法辨識（會警示）；直書字型補位為近似值；inline image 資料中剛好出現「空白 EI 空白」的極端情況
