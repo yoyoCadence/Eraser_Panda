@@ -267,6 +267,13 @@ export function App() {
         </form>
       </dialog>
 
+      <footer class="appfoot">
+        Eraser Panda v{__APP_VERSION__}・所有處理都在你的瀏覽器內完成，頁面不會連上網路・
+        <a href="https://github.com/yoyoCadence/Eraser_Panda" target="_blank" rel="noopener noreferrer">
+          原始碼
+        </a>
+      </footer>
+
       <SettingsDialog
         open={settingsOpen}
         settings={settings}

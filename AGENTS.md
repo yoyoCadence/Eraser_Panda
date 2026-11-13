@@ -16,7 +16,8 @@ npm run dev            # 開發伺服器
 npm run check          # typecheck + 單元測試 + 打包（PR 前必跑）
 npm run build          # 產出 dist/index.html（單一 HTML，可直接用 file:// 開）
 npm run e2e            # 對 dist/index.html 跑 Playwright 冒煙測試（需先 build）
-npm run fixtures       # 重新產生 tests/fixtures/ 下的樣本文件（需 python3 + LibreOffice）
+npm run fixtures       # 重新產生 tests/fixtures/ 下的樣本文件（需 python3 + LibreOffice + PIL）
+npm run release        # 產出 release/EraserPanda.html（使用者下載的檔案；發版時一併提交）
 ```
 
 ## 不可違反的原則
@@ -26,11 +27,14 @@ npm run fixtures       # 重新產生 tests/fixtures/ 下的樣本文件（需 p
 4. **未修改的部分保留原始 bytes**（OOXML 只重寫有變動的 part）。
 5. 只用寬鬆授權（MIT / Apache-2.0 / BSD）套件。不要引入 MuPDF（AGPL）。
 6. Finding id 必須穩定（同輸入 + 同規則 → 同 id），因為 `apply()` 依 id 重新掃描後刪除。
+7. **Excel 工作表不可整份 `pkg.xml()`**（可能數百萬儲存格）—— 一律用 `pkg.fragment()` / `pkg.removeText()`。
+8. 報告（audit report）不得包含文件的上下文內容，只能有標籤字眼與位置。
 
 ## 程式碼地圖
 ```
-src/core/        與格式無關：型別、檔案類型偵測、規則、正規化、比對、跨片段映射
-src/formats/     各格式 handler（實作 FormatHandler：scan / apply）
+src/core/        與格式無關：型別、檔案類型偵測、規則、正規化、比對、跨片段映射、候選刪除模型、預覽、影像雜湊、報告
+src/formats/     各格式 handler（實作 FormatHandler：scan / apply）—— ooxml/、pdf/（content/ 為內容串流引擎）、text/
+src/verify/      原始位元組驗證器
 src/ui/          Preact 介面
 tests/           Vitest 單元測試（happy-dom 環境）；tests/fixtures 樣本文件
 e2e/             Playwright 腳本（對 build 後的單檔 HTML）

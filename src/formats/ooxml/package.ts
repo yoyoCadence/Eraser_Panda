@@ -22,6 +22,9 @@ export class OoxmlPackage {
   private readonly files: Map<string, Uint8Array>;
   private readonly docs = new Map<string, { doc: Document; text: string }>();
   private readonly dirty = new Set<string>();
+  private readonly texts = new Map<string, string>();
+  private readonly patches = new Map<string, Array<{ start: number; end: number; get: () => string | null }>>();
+  private readonly fragments = new Map<string, Fragment>();
   private contentTypes?: { overrides: Map<string, string>; defaults: Map<string, string> };
 
   constructor(bytes: Uint8Array) {
@@ -47,8 +50,43 @@ export class OoxmlPackage {
   }
 
   text(path: string): string | undefined {
+    const cached = this.texts.get(path);
+    if (cached !== undefined) return cached;
     const b = this.files.get(path);
-    return b ? strFromU8(b) : undefined;
+    if (!b) return undefined;
+    const t = strFromU8(b);
+    if (b.length > 256 * 1024) this.texts.set(path, t); // large parts are read repeatedly by fragment scanning
+    return t;
+  }
+
+  /**
+   * Parse ONE element of a (potentially huge) part as a tiny standalone DOM, without building a DOM of the whole
+   * part. `start`/`end` delimit the element in the part's text. Changes are spliced back on save when `touch()`
+   * was called. Calling twice with the same range returns the same fragment.
+   */
+  fragment(path: string, start: number, end: number): Fragment {
+    const key = `${path}@${start}`;
+    const hit = this.fragments.get(key);
+    if (hit) return hit;
+    if (this.docs.has(path)) throw new Error(`fragment() on a part already parsed as a whole: ${path}`);
+    const text = this.text(path)!;
+    const decls = rootNamespaceDecls(text);
+    const src = text.slice(start, end).replace(/^<([\w:.-]+)/, (m) => `${m}${decls ? ` ${decls}` : ''}`);
+    const doc = parseXml(src, path);
+    let dirty = false;
+    const frag: Fragment = { el: doc.documentElement, touch: () => (dirty = true) };
+    const list = this.patches.get(path) ?? [];
+    list.push({ start, end, get: () => (dirty ? stripRootDecls(new XMLSerializer().serializeToString(doc.documentElement), decls) : null) });
+    this.patches.set(path, list);
+    this.fragments.set(key, frag);
+    return frag;
+  }
+
+  /** Delete a byte range of a part's text on save (used for single elements of huge parts). */
+  removeText(path: string, start: number, end: number): void {
+    const list = this.patches.get(path) ?? [];
+    list.push({ start, end, get: () => '' });
+    this.patches.set(path, list);
   }
 
   xml(path: string): Document | undefined {
@@ -192,12 +230,51 @@ export class OoxmlPackage {
       if (this.dirty.has(path)) {
         const { doc, text } = this.docs.get(path)!;
         bytes = strToU8(serializeXml(doc, text));
+      } else if (this.patches.has(path)) {
+        const edits = this.patches
+          .get(path)!
+          .map((p) => ({ ...p, value: p.get() }))
+          .filter((p) => p.value !== null)
+          .sort((a, b) => a.start - b.start);
+        if (edits.length) {
+          const text = this.text(path)!;
+          let out = '';
+          let pos = 0;
+          for (const e of edits) {
+            if (e.start < pos) continue; // overlapping edit (should not happen) — first one wins
+            out += text.slice(pos, e.start) + e.value;
+            pos = e.end;
+          }
+          bytes = strToU8(out + text.slice(pos));
+        }
       }
       const alreadyCompressed = /\.(png|jpe?g|gif|wdp|jxr|mp4|m4a|mp3|zip)$/i.test(path);
       out[path] = [bytes, { level: alreadyCompressed ? 0 : 6, mtime: ZIP_MTIME }];
     }
     return zipSync(out);
   }
+}
+
+export interface Fragment {
+  el: Element;
+  /** mark as changed so it is written back on save */
+  touch: () => void;
+}
+
+/** All namespace declarations of a part's root element, so fragments can be parsed with the same prefixes. */
+function rootNamespaceDecls(text: string): string {
+  const root = /<(?!\?|!)[\w:.-]+\b([^>]*)>/.exec(text);
+  if (!root) return '';
+  return [...root[1]!.matchAll(/\sxmlns(?::[\w.-]+)?="[^"]*"/g)].map((m) => m[0].trim()).join(' ');
+}
+
+/** Remove the declarations injected by `fragment()` from the serialized root start tag. */
+function stripRootDecls(xml: string, decls: string): string {
+  if (!decls) return xml;
+  const end = xml.indexOf('>');
+  let head = xml.slice(0, end);
+  for (const d of decls.split(' ')) head = head.replace(` ${d}`, '');
+  return head + xml.slice(end);
 }
 
 /** Source part of a .rels file: `word/_rels/document.xml.rels` → `word/document.xml`, `_rels/.rels` → ''. */

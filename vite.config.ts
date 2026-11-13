@@ -1,7 +1,12 @@
 import { defineConfig } from 'vitest/config';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 
+import pkg from './package.json' with { type: 'json' };
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [viteSingleFile({ removeViteModuleLoader: true })],
   oxc: {
     jsx: { runtime: 'automatic', importSource: 'preact' },

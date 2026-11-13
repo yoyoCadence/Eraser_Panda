@@ -135,6 +135,26 @@ describe('docx specifics', () => {
   });
 });
 
+describe('comment / revision authors', () => {
+  it.each([
+    ['sample.docx', docxHandler, ['Jane Doe', 'Reviewer']],
+    ['sample.xlsx', xlsxHandler, ['Reviewer']],
+  ] as const)('%s: names are found and replaced with "Author"', async (name, handler, expected) => {
+    const input = load(name);
+    const { findings } = await handler.scan(input, ctx);
+    const f = findings.find((x) => x.id === 'authors#people')!;
+    for (const n of expected) expect(f.matchText).toContain(n);
+    const out = await handler.apply(input, ctx, new Set([f.id]));
+    const xml = Object.entries(parts(out))
+      .filter(([k]) => k.endsWith('.xml') && !k.startsWith('docProps/'))
+      .map(([, v]) => strFromU8(v))
+      .join('');
+    for (const n of expected) expect(xml).not.toContain(n);
+    expect(xml).toContain('Author');
+    assertOpens(out, name.slice(-4) as 'docx' | 'xlsx');
+  });
+});
+
 describe('logos', () => {
   const media = (bytes: Uint8Array) => Object.keys(parts(bytes)).filter((k) => /\/media\//.test(k)).sort();
 

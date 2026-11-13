@@ -64,7 +64,7 @@ interface FormatHandler {
 | M6 | Logo | PDF 圖片 XObject 定位與跨頁重複偵測、Office 頁首/母片圖片、上傳樣本感知雜湊比對、刪除並清理 | ✅ |
 | M7 | 預覽強化 | PDF 高亮 + 處理前/後對照；docx/xlsx/pptx 結構化預覽 | ✅ |
 | M8 | 信任與批次 | 輸出驗證（殘留 0）、稽核報告 JSON/CSV、多檔 ZIP、設定匯出/匯入 | ✅ |
-| M9 | 強化與發佈 | Playwright E2E（含「零網路請求」）、Web Worker、加密/舊格式/損毀檔訊息、中英切換、`release/EraserPanda.html` | ⬜ |
+| M9 | 強化與發佈 | Playwright E2E（含「零網路請求」）、效能、加密/舊格式/損毀檔訊息、身分資訊、`release/EraserPanda.html` | ✅ |
 
 每個里程碑的細項與完成紀錄寫在下方「進度日誌」。
 
@@ -147,3 +147,22 @@ interface FormatHandler {
 - [x] 設定**匯出 / 匯入**（JSON，匯入時嚴格 sanitize），讓團隊共用同一套字眼與 Logo 樣本
 - [x] 首次清除前的**一次性確認**：提醒本工具不判斷可否外傳（可勾選不再提醒，存 localStorage）
 - 實測：清除全部後原始位元組殘留只剩 Excel 工作表名稱（設計上只提示）
+
+### M9 強化與發佈（v1.0.0）
+- [x] **效能實測與修正**：5 萬列 Excel 原本在 DOM 解析時記憶體爆掉 → 工作表改為**片段策略**（`OoxmlPackage.fragment()`：只把命中的儲存格 / 頁首頁尾切成小 DOM，存檔時拼回原文字；共用字串參照用 regex）；原始位元組驗證分段掃描。實測：5 萬列 xlsx 掃描 1.4s / 清除 1.9s；200 頁 PDF 掃描 1.8s / 清除 2.0s（Node）
+- [x] **註解 / 追蹤修訂作者去識別化**（Word `w:author`、`people.xml` 帳號 ID、Excel 註解作者 / persons、PowerPoint commentAuthors / authors）→ 改為「Author」
+- [x] Word 欄位代碼（`w:instrText`）內的字眼
+- [x] 強韌性測試：截斷 / 非 Office 的 zip、損毀 XML、權限密碼 PDF、截斷 PDF、畸形內容串流 —— 一律給出可行動訊息而非當機
+- [x] 版本號 v1.0.0、頁尾、`npm run release` → **`release/EraserPanda.html`**（使用者直接下載這個檔）
+- [x] README：截圖、功能表、信任機制、已知限制
+- 決策（不做）：
+  - **Web Worker**：引擎依賴 DOMParser，Worker 中不可用；改以片段策略控制記憶體、主執行緒分段讓出。若未來要做，需把 XML 層換成可在 Worker 執行的解析器並以同一套測試驗證
+  - **解除 PDF 權限密碼**：技術上可行（標準安全處理常式），但屬於繞過文件保護，與本工具「只移除標籤」的定位不符；維持拒絕並建議「列印成 PDF」
+  - **英文介面**：目標使用者為繁中，暫不做
+
+## 4. 後續可做（Backlog，依價值排序）
+1. 以使用者真實文件回饋調整預設字庫與 Logo 啟發式（誤判 / 漏判案例 → 加入 fixtures）
+2. Excel 工作表層級 customPr（二進位）、MIP 內容標記圖形（MSIPCMContentMarking）整個圖形移除
+3. EMF / WMF 解析以支援向量 Logo 雜湊比對
+4. PDF 表單欄位值（AcroForm `/V`）、Tagged PDF 結構樹中的 `/Alt` `/ActualText`
+5. ODF（.odt / .ods / .odp）

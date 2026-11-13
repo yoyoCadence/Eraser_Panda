@@ -265,3 +265,74 @@ export function markDirtyOnWrite(pkg: OoxmlPackage, path: string, unit: TextUnit
     },
   };
 }
+
+/**
+ * Personal names of comment / tracked-change authors (and the e-mail addresses Office stores next to them).
+ * Word: w:author / w:initials on comments and revisions, people.xml (w15:person + presenceInfo with user ids);
+ * Excel: comment <authors>, persons part; PowerPoint: commentAuthors.xml, authors.xml.
+ * One finding per document; removal replaces every name with "Author".
+ */
+export function scanAuthors(pkg: OoxmlPackage): Candidate[] {
+  const parts = pkg.paths.filter((p) => {
+    const ct = pkg.contentType(p) ?? '';
+    return (
+      /wordprocessingml\.(document|template)\.main|macroEnabled\.main|wordprocessingml\.(comments|header|footer|footnotes|endnotes)\+xml|\.people\+xml/.test(ct) ||
+      /spreadsheetml\.comments\+xml|\.person\+xml/.test(ct) ||
+      /presentationml\.commentAuthors\+xml|\.authors\+xml/.test(ct)
+    );
+  });
+  const names = new Set<string>();
+  const edits: Array<() => void> = [];
+  for (const path of parts) {
+    let doc: Document | undefined;
+    try {
+      doc = pkg.xml(path);
+    } catch {
+      continue;
+    }
+    if (!doc) continue;
+    for (const el of Array.from(doc.getElementsByTagName('*'))) {
+      for (const attr of Array.from(el.attributes)) {
+        const ln = attr.localName;
+        const isName = ln === 'author' || ln === 'displayName' || (ln === 'name' && /^(cmAuthor|author)$/.test(el.localName));
+        const isId = ln === 'initials' || ln === 'userId' || ln === 'providerId';
+        if (!isName && !isId) continue;
+        if (!attr.value || attr.value === 'Author' || attr.value === 'A') continue;
+        if (isName) names.add(attr.value);
+        const replacement = isName ? 'Author' : ln === 'initials' ? 'A' : '';
+        edits.push(() => {
+          el.setAttributeNS(attr.namespaceURI, attr.name, replacement);
+          pkg.markDirty(path);
+        });
+      }
+      // Excel legacy comments: <authors><author>Jane Doe</author></authors>
+      if (el.localName === 'author' && el.parentElement?.localName === 'authors' && el.textContent && el.textContent !== 'Author') {
+        names.add(el.textContent);
+        edits.push(() => {
+          el.textContent = 'Author';
+          pkg.markDirty(path);
+        });
+      }
+    }
+  }
+  if (!names.size) return [];
+  const list = [...names];
+  const text = list.slice(0, 3).join('、') + (list.length > 3 ? ` 等 ${list.length} 人` : '');
+  return [
+    {
+      finding: {
+        id: 'authors#people',
+        kind: 'metadata',
+        location: 'property',
+        matchText: text,
+        context: { before: '註解 / 修訂作者：', match: text, after: '' },
+        where: '註解 / 追蹤修訂作者',
+        confidence: 'medium',
+        removable: true,
+        defaultSelected: true,
+        note: '身分資訊：作者名稱（及 Office 帳號 ID）將改為「Author」',
+      },
+      remove: () => edits.forEach((e) => e()),
+    },
+  ];
+}

@@ -54,6 +54,12 @@ export function collectDocx(pkg: OoxmlPackage): TextUnit[] {
       );
     });
 
+    // ---- field codes: { QUOTE "Confidential" }, { IF … "Secret" } — text that is not displayed but is in the file ----
+    els(doc, NS.w, 'instrText').forEach((it, i) => {
+      if (!it.textContent?.trim()) return;
+      units.push(markDirtyOnWrite(pkg, path, { part: path, key: `fld${i}`, location: 'other', where: `${partName}・欄位代碼`, segments: [{ text: it.textContent }], refs: [{ el: it }] }));
+    });
+
     // ---- VML WordArt watermarks (Design → Watermark) ----
     els(doc, NS.v, 'textpath').forEach((tp, i) => {
       if (!tp.getAttribute('string')) return;

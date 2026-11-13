@@ -1,6 +1,6 @@
 {
   "name": "eraser-panda",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Local-only single-HTML tool that strips classification labels, logos and sensitivity metadata from PDF / Office documents.",
   "type": "module",
@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run test && npm run build",
     "e2e": "node e2e/smoke.cjs",
-    "fixtures": "python3 scripts/make_fixtures.py && python3 scripts/make_pdf_fixtures.py"
+    "fixtures": "python3 scripts/make_fixtures.py && python3 scripts/make_pdf_fixtures.py",
+    "release": "vite build && node -e \"require('fs').mkdirSync('release',{recursive:true});require('fs').copyFileSync('dist/index.html','release/EraserPanda.html')\""
   },
   "dependencies": {
     "fflate": "^0.8.3",

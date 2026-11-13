@@ -136,10 +136,18 @@ def reportlab_pdf():
 
 
 
+def encrypted_pdf():
+    """Owner-password-only PDF (opens without a password, editing restricted) — common in corporate exports."""
+    w = PdfWriter(clone_from=os.path.join(OUT, "incremental.pdf"))
+    w.encrypt(user_password="", owner_password="owner-secret", algorithm="AES-128")
+    w.write(os.path.join(OUT, "encrypted.pdf"))
+
+
 if __name__ == "__main__":
     office_pdf()
     incremental_pdf()
     reportlab_pdf()
-    for name in ("office.pdf", "incremental.pdf", "reportlab.pdf"):
+    encrypted_pdf()
+    for name in ("office.pdf", "incremental.pdf", "reportlab.pdf", "encrypted.pdf"):
         r = PdfReader(os.path.join(OUT, name))
         print(name, len(r.pages), "pages")
