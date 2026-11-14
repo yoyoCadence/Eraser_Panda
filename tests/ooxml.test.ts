@@ -127,6 +127,26 @@ describe('docx specifics', () => {
     expect(body).toMatch(/<w:t xml:space="preserve">This document contains information about the plan\.<\/w:t>/);
   });
 
+  it('keeps HYPERLINK fields (static) while still unlinking data fields', async () => {
+    const p = parts(load('sample.docx'));
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    p['word/document.xml'] = strToU8(
+      strFromU8(p['word/document.xml']!).replace(
+        '<w:sectPr',
+        `<w:p><w:fldSimple ${W} w:instr=" HYPERLINK &quot;https://example.com/report&quot; "><w:r><w:t>Confidential report</w:t></w:r></w:fldSimple></w:p>` +
+          `<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> HYPERLINK "https://example.com/x" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Secret plan</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p><w:sectPr`,
+      ),
+    );
+    const input = zipSync(p);
+    const { findings } = await docxHandler.scan(input, ctx);
+    const out = await docxHandler.apply(input, ctx, new Set(findings.filter((f) => f.removable && f.kind === 'text').map((f) => f.id)));
+    const body = part(out, 'word/document.xml')!;
+    expect(body).toMatch(/w:instr=" HYPERLINK &quot;https:\/\/example\.com\/report&quot; "><w:r><w:t xml:space="preserve">report<\/w:t>/);
+    expect(body).toMatch(/HYPERLINK "https:\/\/example\.com\/x"/); // complex hyperlink field kept
+    expect(body).not.toMatch(/DOCPROPERTY Status/); // the data field is still unlinked
+    assertOpens(out, 'docx');
+  });
+
   it('honours exceptions', async () => {
     const input = load('sample.docx');
     const { findings } = await docxHandler.scan(input, ctx);

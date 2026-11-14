@@ -164,6 +164,31 @@ def tagged_pdf():
     shutil.rmtree(tmp)
 
 
+def scanned_pdf():
+    """A 'searchable scan': the page is one full-page image (with CONFIDENTIAL burnt into the pixels) and an
+    invisible OCR text layer (text render mode 3) on top — what scanners / OCR software produce."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("L", (850, 1100), 255)
+    dr = ImageDraw.Draw(img)
+    dr.rectangle([60, 60, 330, 100], outline=0)
+    dr.text((80, 72), "CONFIDENTIAL", fill=0)
+    dr.text((80, 200), "Quarterly report for the board", fill=0)
+    path = os.path.join(tempfile.mkdtemp(), "scan.png")
+    img.save(path)
+    c = canvas.Canvas(os.path.join(OUT, "scanned.pdf"), pagesize=A4)
+    w, h = A4
+    c.drawImage(path, 0, 0, width=w, height=h)
+    t = c.beginText(57, h - 60)
+    t.setTextRenderMode(3)  # invisible: OCR layer
+    t.setFont("Helvetica", 12)
+    t.textLine("CONFIDENTIAL")
+    t.moveCursor(0, 80)
+    t.textLine("Quarterly report for the board")
+    c.drawText(t)
+    c.save()
+
+
 def encrypted_pdf():
     """Owner-password-only PDF (opens without a password, editing restricted) — common in corporate exports."""
     w = PdfWriter(clone_from=os.path.join(OUT, "incremental.pdf"))
@@ -178,6 +203,7 @@ if __name__ == "__main__":
     encrypted_pdf()
     form_pdf()
     tagged_pdf()
-    for name in ("office.pdf", "incremental.pdf", "reportlab.pdf", "encrypted.pdf", "form.pdf", "tagged.pdf"):
+    scanned_pdf()
+    for name in ("office.pdf", "incremental.pdf", "reportlab.pdf", "encrypted.pdf", "form.pdf", "tagged.pdf", "scanned.pdf"):
         r = PdfReader(os.path.join(OUT, name))
         print(name, len(r.pages), "pages")

@@ -169,6 +169,21 @@ describe('tagged PDF structure tree', () => {
   });
 });
 
+describe('scanned PDF with OCR layer', () => {
+  it('removes the searchable OCR text but warns that the image still shows the label', async () => {
+    const { findings, warnings } = await pdfHandler.scan(load('scanned.pdf'), ctx);
+    expect(warnings.join()).toMatch(/第 1 頁是掃描影像/);
+    const ocr = findings.find((f) => f.matchText === 'CONFIDENTIAL')!;
+    expect(ocr.note).toMatch(/OCR 隱形文字層/);
+  });
+
+  it('ordinary PDFs with pictures are not called scans', async () => {
+    for (const name of ['office.pdf', 'reportlab.pdf', 'tagged.pdf']) {
+      expect((await pdfHandler.scan(load(name), ctx)).warnings.join(), name).not.toMatch(/掃描影像/);
+    }
+  });
+});
+
 describe('PDF incremental updates', () => {
   it('drops stale revisions that still contain the label, even when nothing is selected', async () => {
     const input = load('incremental.pdf');

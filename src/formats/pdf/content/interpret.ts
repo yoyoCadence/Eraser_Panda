@@ -56,6 +56,8 @@ export interface TextRun {
   vertical: boolean;
   mc: McKind;
   page: number;
+  /** drawn with an invisible rendering mode (OCR text layer) */
+  invisible: boolean;
 }
 
 export interface ImagePlacement {
@@ -79,6 +81,8 @@ interface GState {
   th: number;
   tl: number;
   rise: number;
+  /** text rendering mode (3 / 7 = invisible: OCR layers of scanned documents) */
+  tr: number;
 }
 
 export interface InterpretResult {
@@ -133,7 +137,7 @@ function run(doc: PDFDocument, src: Source, resources: PDFDict | undefined, ctm0
   const xobjects = resources ? lookupDict(doc, resources.get(PDFName.of('XObject'))) : undefined;
   const props = resources ? lookupDict(doc, resources.get(PDFName.of('Properties'))) : undefined;
 
-  let gs: GState = { ctm: ctm0, font: null, fs: 0, tc: 0, tw: 0, th: 1, tl: 0, rise: 0 };
+  let gs: GState = { ctm: ctm0, font: null, fs: 0, tc: 0, tw: 0, th: 1, tl: 0, rise: 0, tr: 0 };
   const stack: GState[] = [];
   let tm: Matrix = IDENTITY;
   let tlm: Matrix = IDENTITY;
@@ -169,7 +173,7 @@ function run(doc: PDFDocument, src: Source, resources: PDFDict | undefined, ctm0
     dx /= len;
     dy /= len;
     const height = Math.hypot(yAxis[0] - start[0], yAxis[1] - start[1]);
-    out.runs.push({ src, instr, elem, glyphs, quads, start, end, dir: [dx, dy], height, fs: gs.fs, tc: gs.tc, tw: gs.tw, th: gs.th, vertical: font.vertical, mc: mc(), page: src.page });
+    out.runs.push({ src, instr, elem, glyphs, quads, start, end, dir: [dx, dy], height, fs: gs.fs, tc: gs.tc, tw: gs.tw, th: gs.th, vertical: font.vertical, mc: mc(), page: src.page, invisible: gs.tr === 3 || gs.tr === 7 });
   };
 
   const nextLine = () => {
@@ -209,6 +213,9 @@ function run(doc: PDFDocument, src: Source, resources: PDFDict | undefined, ctm0
         break;
       case 'TL':
         gs.tl = numArg(a[0]);
+        break;
+      case 'Tr':
+        gs.tr = numArg(a[0]);
         break;
       case 'Ts':
         gs.rise = numArg(a[0]);

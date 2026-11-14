@@ -105,6 +105,7 @@ export function unlinkFields(changed: readonly Element[]): void {
     // Simple field: <w:fldSimple w:instr="DOCPROPERTY X"><w:r><w:t>Confidential</w:t></w:r></w:fldSimple>
     const simple = closest(t, NS.w, 'fldSimple');
     if (simple && simple.parentNode) {
+      if (isStaticField(simple.getAttributeNS(NS.w, 'instr') ?? '')) continue;
       while (simple.firstChild) simple.parentNode.insertBefore(simple.firstChild, simple);
       removeEl(simple);
       continue;
@@ -144,10 +145,23 @@ export function unlinkFields(changed: readonly Element[]): void {
       }
     }
     if (sep < 0 || end < 0 || idx <= sep || idx >= end) continue;
+    const instr = siblings
+      .slice(begin + 1, sep)
+      .flatMap((r) => Array.from(r.getElementsByTagNameNS(NS.w, 'instrText')).map((x) => x.textContent ?? ''))
+      .join('');
+    if (isStaticField(instr)) continue;
     // remove begin..separate (field code) and the end marker; keep the result runs as plain text
     for (let i = begin; i <= sep; i++) removeEl(siblings[i]!);
     removeEl(siblings[end]!);
   }
+}
+
+/**
+ * Fields whose result is never recomputed from a data source keep working after their text is edited —
+ * unlinking them would only destroy them (a HYPERLINK would stop being a link).
+ */
+function isStaticField(instr: string): boolean {
+  return /^\s*(HYPERLINK|GOTOBUTTON|MACROBUTTON)\b/i.test(instr);
 }
 
 function fldCharType(el: Element): string | null {
