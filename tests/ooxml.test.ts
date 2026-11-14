@@ -155,6 +155,46 @@ describe('comment / revision authors', () => {
   });
 });
 
+describe('account ids next to author names', () => {
+  it('docx people.xml: presenceInfo (Office account e-mail) is removed, the part stays valid', async () => {
+    const p = parts(load('sample.docx'));
+    p['word/people.xml'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">' +
+        '<w15:person w15:author="Jane Doe"><w15:presenceInfo w15:providerId="AD" w15:userId="S::jane.doe@acme.example::1234"/></w15:person></w15:people>',
+    );
+    p['[Content_Types].xml'] = strToU8(
+      strFromU8(p['[Content_Types].xml']!).replace('</Types>', '<Override PartName="/word/people.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml"/></Types>'),
+    );
+    const input = zipSync(p);
+    const { findings } = await docxHandler.scan(input, ctx);
+    const f = findings.find((x) => x.id === 'authors#people')!;
+    const out = await docxHandler.apply(input, ctx, new Set([f.id]));
+    const people = strFromU8(parts(out)['word/people.xml']!);
+    expect(people).not.toMatch(/jane|Jane|acme|presenceInfo/);
+    expect(people).toMatch(/w15:author="Author"/);
+  });
+
+  it('pptx authors.xml: userId / providerId get valid placeholder values, never empty', async () => {
+    const p = parts(load('sample.pptx'));
+    p['ppt/authors.xml'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p188:authorLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main">' +
+        '<p188:author id="{1}" name="Jane Doe" initials="JD" userId="jane.doe@acme.example" providerId="AD"/></p188:authorLst>',
+    );
+    p['[Content_Types].xml'] = strToU8(
+      strFromU8(p['[Content_Types].xml']!).replace('</Types>', '<Override PartName="/ppt/authors.xml" ContentType="application/vnd.ms-powerpoint.authors+xml"/></Types>'),
+    );
+    const input = zipSync(p);
+    const { findings } = await pptxHandler.scan(input, ctx);
+    const f = findings.find((x) => x.id === 'authors#people')!;
+    expect(f.matchText).toContain('Jane Doe');
+    const out = await pptxHandler.apply(input, ctx, new Set([f.id]));
+    const authors = strFromU8(parts(out)['ppt/authors.xml']!);
+    expect(authors).not.toMatch(/jane|Jane|acme|""/);
+    expect(authors).toMatch(/name="Author"/);
+    expect(authors).toMatch(/providerId="None"/);
+  });
+});
+
 describe('logos', () => {
   const media = (bytes: Uint8Array) => Object.keys(parts(bytes)).filter((k) => /\/media\//.test(k)).sort();
 

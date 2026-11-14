@@ -292,14 +292,24 @@ export function scanAuthors(pkg: OoxmlPackage): Candidate[] {
     }
     if (!doc) continue;
     for (const el of Array.from(doc.getElementsByTagName('*'))) {
+      // Word people.xml: <w15:presenceInfo w15:providerId="AD" w15:userId="S::jane@acme.com::…"/> — optional element
+      // that only carries the account id: drop it entirely instead of leaving empty attributes behind.
+      if (el.localName === 'presenceInfo') {
+        edits.push(() => {
+          el.parentNode?.removeChild(el);
+          pkg.markDirty(path);
+        });
+        continue;
+      }
       for (const attr of Array.from(el.attributes)) {
         const ln = attr.localName;
         const isName = ln === 'author' || ln === 'displayName' || (ln === 'name' && /^(cmAuthor|author)$/.test(el.localName));
         const isId = ln === 'initials' || ln === 'userId' || ln === 'providerId';
         if (!isName && !isId) continue;
-        if (!attr.value || attr.value === 'Author' || attr.value === 'A') continue;
+        // values Office itself uses for "no account": userId = display name, providerId = None
+        const replacement = isName || ln === 'userId' ? 'Author' : ln === 'initials' ? 'A' : 'None';
+        if (!attr.value || attr.value === replacement) continue;
         if (isName) names.add(attr.value);
-        const replacement = isName ? 'Author' : ln === 'initials' ? 'A' : '';
         edits.push(() => {
           el.setAttributeNS(attr.namespaceURI, attr.name, replacement);
           pkg.markDirty(path);
