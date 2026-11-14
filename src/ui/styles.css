@@ -836,6 +836,19 @@ dialog.confirm p {
   color: inherit;
 }
 
+.folder-link {
+  display: block;
+  margin: 10px auto 0;
+  font-size: 13px;
+}
+
+.notice {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--accent-weak);
+}
+
 /* ---------- settings dialog ---------- */
 dialog.settings {
   width: min(640px, calc(100vw - 32px));

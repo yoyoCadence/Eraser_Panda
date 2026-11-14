@@ -26,6 +26,8 @@ export function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirm, setConfirm] = useState<null | (() => void)>(null);
+  const [notice, setNotice] = useState('');
+  const onSkipped = useCallback((n: number) => setNotice(`資料夾中有 ${n} 個檔案未加入（不支援的格式、Office 暫存鎖定檔 ~$ 或隱藏檔）。`), []);
   const confirmRef = useRef<HTMLDialogElement>(null);
   const [dontAsk, setDontAsk] = useState(false);
   useEffect(() => {
@@ -140,7 +142,7 @@ export function App() {
 
       {docs.length === 0 ? (
         <main class="landing">
-          <DropZone onFiles={addFiles} />
+          <DropZone onFiles={addFiles} onSkipped={onSkipped} />
           <ol class="steps">
             <li>
               <b>拖曳文件</b>：PDF、Word、Excel、PowerPoint、TXT / CSV，可一次多個
@@ -160,7 +162,15 @@ export function App() {
       ) : (
         <main class="workspace">
           <aside class="sidebar">
-            <DropZone onFiles={addFiles} compact />
+            <DropZone onFiles={addFiles} onSkipped={onSkipped} compact />
+            {notice && (
+              <p class="notice small" data-testid="notice">
+                {notice}{' '}
+                <button type="button" class="link" onClick={() => setNotice('')}>
+                  知道了
+                </button>
+              </p>
+            )}
             <ul class="filelist" data-testid="file-list">
               {docs.map((d) => (
                 <li key={d.key} class={`${d.key === activeKey ? 'active' : ''} ${d.status}`}>
