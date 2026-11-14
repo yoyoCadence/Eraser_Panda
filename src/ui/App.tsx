@@ -76,7 +76,7 @@ export function App() {
       for (const d of docsRef.current) {
         if (d.bytes && d.format && (d.status === 'ready' || d.status === 'done')) {
           patch(d.key, { status: 'scanning' });
-          await scanBytes(d.key, d.bytes, d.format, { ...scanCtx, fileName: d.name }, patch);
+          await scanBytes(d.key, d.bytes, d.format, { ...scanCtx, fileName: d.name }, patch, { result: d.result, selected: d.selected });
         }
       }
     })();
@@ -86,14 +86,15 @@ export function App() {
     async (key: string, autoDownload = true) => {
       const doc = docsRef.current.find((d) => d.key === key);
       if (!doc || !doc.result) return undefined;
-      patch(key, { status: 'cleaning' });
+      patch(key, { status: 'cleaning', cleanError: undefined });
       try {
         const output = await cleanDoc(doc, ctxRef.current);
         patch(key, { status: 'done', output });
         if (autoDownload) download(output.name, output.bytes);
         return output;
       } catch (e) {
-        patch(key, { status: 'error', error: `清除失敗：${(e as Error).message}` });
+        // keep the scan result so the user can change the selection and retry
+        patch(key, { status: 'ready', cleanError: `清除失敗：${(e as Error).message}` });
         return undefined;
       }
     },

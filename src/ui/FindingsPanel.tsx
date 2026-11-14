@@ -104,6 +104,11 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
             <input class="filter" type="search" placeholder="篩選…" value={filter} onInput={(e) => setFilter(e.currentTarget.value)} aria-label="篩選發現項目" />
           </div>
 
+          {doc.cleanError && (
+            <p class="warn" data-testid="clean-error">
+              ⚠️ {doc.cleanError}
+            </p>
+          )}
           {doc.output && <CleanResult output={doc.output} onDownloadAgain={onDownloadAgain} />}
 
           <div class={hasPreview ? 'split' : ''}>

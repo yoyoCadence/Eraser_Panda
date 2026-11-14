@@ -99,6 +99,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   await page.locator('.filelist li', { hasText: 'sample.docx' }).locator('.file-btn').click();
   await page.waitForFunction(() => document.querySelector('[data-testid=findings-panel]')?.textContent?.includes('Logo（符合樣本）'), null, { timeout: 15000 });
   check('logo sample matches an ordinary picture', true);
+  const stillKept = await page.locator('[data-group="hf"] li', { hasText: '頁首 1' }).first().locator('input[type=checkbox]').isChecked();
+  check('exception survives the re-scan after a settings change', stillKept === false);
   if (shots) await page.screenshot({ path: path.join(shots, '6-logo.png'), fullPage: false });
 
   // ---- batch: ZIP of every cleanable file ----
