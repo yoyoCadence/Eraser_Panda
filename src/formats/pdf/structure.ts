@@ -262,3 +262,46 @@ export function scanFormFields(doc: PDFDocument): { units: TextUnit[]; finalize:
   };
   return { units, finalize, warnings };
 }
+
+/**
+ * Tagged-PDF structure tree: accessibility text that screen readers and text extractors read —
+ * /Alt (alternative description, e.g. of a logo), /ActualText (replacement text), /T (title), /E (expansion).
+ */
+export function scanStructTree(doc: PDFDocument): TextUnit[] {
+  const root = lookupDict(doc, doc.catalog.get(PDFName.of('StructTreeRoot')));
+  if (!root) return [];
+  const units: TextUnit[] = [];
+  const seen = new Set<PDFDict>();
+  const LABEL: Record<string, string> = { Alt: '替代文字', ActualText: '實際文字', T: '標題', E: '縮寫展開' };
+  let n = 0;
+  let budget = 200_000; // pathological trees
+  const walk = (o: PDFObject | undefined, depth: number) => {
+    if (budget-- <= 0 || depth > 200) return;
+    const arr = lookupArray(doc, o);
+    if (arr) {
+      for (let i = 0; i < arr.size(); i++) walk(arr.get(i), depth + 1);
+      return;
+    }
+    const d = lookupDict(doc, o);
+    if (!d || seen.has(d)) return;
+    seen.add(d);
+    for (const key of Object.keys(LABEL)) {
+      const k = PDFName.of(key);
+      const value = pdfText(d.lookup(k));
+      if (!value?.trim()) continue;
+      const type = nameOf(d.lookup(PDFName.of('S'))) ?? '';
+      units.push({
+        part: 'struct',
+        key: `s${n++}:${key}`,
+        location: 'other',
+        where: `無障礙標籤・${LABEL[key]}${type ? `（${type}）` : ''}`,
+        segments: [{ text: value }],
+        refs: [null],
+        write: ([t]) => d.set(k, toPdfString(t!)),
+      });
+    }
+    walk(d.get(PDFName.of('K')), depth + 1);
+  };
+  walk(root.get(PDFName.of('K')), 0);
+  return units;
+}

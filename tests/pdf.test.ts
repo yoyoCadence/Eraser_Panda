@@ -155,6 +155,20 @@ describe('PDF form fields (AcroForm)', () => {
   });
 });
 
+describe('tagged PDF structure tree', () => {
+  it('cleans accessibility text (/Alt of a logo) and keeps the tree', async () => {
+    const input = load('tagged.pdf');
+    const { findings } = await pdfHandler.scan(input, ctx);
+    const alt = findings.find((f) => f.where.startsWith('無障礙標籤・替代文字'))!;
+    expect(alt.matchText).toBe('Confidential');
+    const out = await pdfHandler.apply(input, ctx, new Set([alt.id]));
+    expect(latin1(out)).not.toMatch(/ACME Confidential logo/);
+    expect(latin1(out)).toMatch(/StructTreeRoot/);
+    const t = pypdfText(out, 'tagged_clean.pdf');
+    if (t !== undefined) expect(t).toMatch(/Quarterly report/);
+  });
+});
+
 describe('PDF incremental updates', () => {
   it('drops stale revisions that still contain the label, even when nothing is selected', async () => {
     const input = load('incremental.pdf');

@@ -5,14 +5,14 @@ import { applyPlan, scanPageText } from './content/textScan';
 import { dropImageResources, scanPdfImages } from './images';
 import { scanPdfMetadata } from './metadata';
 import { loadPdf, savePdf } from './pdfdoc';
-import { scanAnnotations, scanAttachments, scanFormFields, scanOutlines } from './structure';
+import { scanAnnotations, scanAttachments, scanFormFields, scanOutlines, scanStructTree } from './structure';
 
 async function collect(bytes: Uint8Array, ctx: ScanContext) {
   const doc = await loadPdf(bytes);
   const compiled = compileRules(ctx.rules);
   const meta = scanPdfMetadata(doc, compiled);
   const form = scanFormFields(doc);
-  const units = [...meta.units, ...scanOutlines(doc), ...form.units];
+  const units = [...meta.units, ...scanOutlines(doc), ...form.units, ...scanStructTree(doc)];
   const attachments = scanAttachments(doc);
   const text = scanPageText(doc, compiled);
   const images = await scanPdfImages(doc, text, ctx);

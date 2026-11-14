@@ -146,6 +146,24 @@ def form_pdf():
     c.save()
 
 
+def tagged_pdf():
+    """Tagged (accessible) PDF exported by LibreOffice: the picture's alt text lands in the structure tree /Alt."""
+    import docx
+
+    tmp = tempfile.mkdtemp()
+    d = docx.Document()
+    d.add_paragraph("Quarterly report")
+    d.add_picture(os.path.join(OUT, "logo.png"))
+    d.inline_shapes[0]._inline.docPr.set("descr", "ACME Confidential logo")
+    d.add_paragraph("End of report.")
+    src = os.path.join(tmp, "tagged.docx")
+    d.save(src)
+    opts = 'pdf:writer_pdf_Export:{"UseTaggedPDF":{"type":"boolean","value":"true"}}'
+    subprocess.run(["soffice", "--headless", "--convert-to", opts, "--outdir", tmp, src], check=True, capture_output=True, timeout=180)
+    shutil.copy(os.path.join(tmp, "tagged.pdf"), os.path.join(OUT, "tagged.pdf"))
+    shutil.rmtree(tmp)
+
+
 def encrypted_pdf():
     """Owner-password-only PDF (opens without a password, editing restricted) — common in corporate exports."""
     w = PdfWriter(clone_from=os.path.join(OUT, "incremental.pdf"))
@@ -159,6 +177,7 @@ if __name__ == "__main__":
     reportlab_pdf()
     encrypted_pdf()
     form_pdf()
-    for name in ("office.pdf", "incremental.pdf", "reportlab.pdf", "encrypted.pdf", "form.pdf"):
+    tagged_pdf()
+    for name in ("office.pdf", "incremental.pdf", "reportlab.pdf", "encrypted.pdf", "form.pdf", "tagged.pdf"):
         r = PdfReader(os.path.join(OUT, name))
         print(name, len(r.pages), "pages")
