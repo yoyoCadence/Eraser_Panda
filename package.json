@@ -1,6 +1,6 @@
 {
   "name": "eraser-panda",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Local-only single-HTML tool that strips classification labels, logos and sensitivity metadata from PDF / Office documents.",
   "type": "module",
