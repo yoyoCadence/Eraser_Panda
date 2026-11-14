@@ -24,7 +24,9 @@ export interface CompiledRules {
 
 // "Word" characters for whole-word matching. CJK is intentionally excluded: CJK text has no spaces, so
 // "本文件為Confidential" must still match "Confidential", and 機密 must match inside 公司機密文件.
-const WORDISH = String.raw`[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Nd}_]`;
+// "_" is NOT a word character here: labels appear in file names and identifiers such as
+// "ACME_Confidential_2024.docx" or "confidential_logo", where the underscore is a separator.
+const WORDISH = String.raw`[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Nd}]`;
 const WORDISH_RE = new RegExp(`^${WORDISH}$`, 'u');
 const CJK_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const SYNTAX = /[\\^$.*+?()[\]{}|/]/;

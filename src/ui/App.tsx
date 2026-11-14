@@ -26,6 +26,8 @@ export function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirm, setConfirm] = useState<null | (() => void)>(null);
+  const [notice, setNotice] = useState('');
+  const onSkipped = useCallback((n: number) => setNotice(`資料夾中有 ${n} 個檔案未加入（不支援的格式、Office 暫存鎖定檔 ~$ 或隱藏檔）。`), []);
   const confirmRef = useRef<HTMLDialogElement>(null);
   const [dontAsk, setDontAsk] = useState(false);
   useEffect(() => {
@@ -76,7 +78,7 @@ export function App() {
       for (const d of docsRef.current) {
         if (d.bytes && d.format && (d.status === 'ready' || d.status === 'done')) {
           patch(d.key, { status: 'scanning' });
-          await scanBytes(d.key, d.bytes, d.format, scanCtx, patch);
+          await scanBytes(d.key, d.bytes, d.format, { ...scanCtx, fileName: d.name }, patch, { result: d.result, selected: d.selected });
         }
       }
     })();
@@ -86,14 +88,15 @@ export function App() {
     async (key: string, autoDownload = true) => {
       const doc = docsRef.current.find((d) => d.key === key);
       if (!doc || !doc.result) return undefined;
-      patch(key, { status: 'cleaning' });
+      patch(key, { status: 'cleaning', cleanError: undefined });
       try {
         const output = await cleanDoc(doc, ctxRef.current);
         patch(key, { status: 'done', output });
         if (autoDownload) download(output.name, output.bytes);
         return output;
       } catch (e) {
-        patch(key, { status: 'error', error: `清除失敗：${(e as Error).message}` });
+        // keep the scan result so the user can change the selection and retry
+        patch(key, { status: 'ready', cleanError: `清除失敗：${(e as Error).message}` });
         return undefined;
       }
     },
@@ -139,7 +142,7 @@ export function App() {
 
       {docs.length === 0 ? (
         <main class="landing">
-          <DropZone onFiles={addFiles} />
+          <DropZone onFiles={addFiles} onSkipped={onSkipped} />
           <ol class="steps">
             <li>
               <b>拖曳文件</b>：PDF、Word、Excel、PowerPoint、TXT / CSV，可一次多個
@@ -159,7 +162,15 @@ export function App() {
       ) : (
         <main class="workspace">
           <aside class="sidebar">
-            <DropZone onFiles={addFiles} compact />
+            <DropZone onFiles={addFiles} onSkipped={onSkipped} compact />
+            {notice && (
+              <p class="notice small" data-testid="notice">
+                {notice}{' '}
+                <button type="button" class="link" onClick={() => setNotice('')}>
+                  知道了
+                </button>
+              </p>
+            )}
             <ul class="filelist" data-testid="file-list">
               {docs.map((d) => (
                 <li key={d.key} class={`${d.key === activeKey ? 'active' : ''} ${d.status}`}>

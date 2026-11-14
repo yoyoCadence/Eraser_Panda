@@ -1,4 +1,4 @@
-import { PDFArray, PDFDict, PDFName, PDFNumber, PDFRawStream, PDFRef, type PDFDocument, type PDFObject } from 'pdf-lib';
+import { PDFArray, PDFBool, PDFDict, PDFName, PDFNumber, PDFRawStream, PDFRef, type PDFDocument, type PDFObject } from 'pdf-lib';
 import type { Candidate, TextUnit } from '../../core/candidates';
 import { findHits, type CompiledRules } from '../../core/matcher';
 import { formText } from './content/interpret';
@@ -178,4 +178,130 @@ function fileName(doc: PDFDocument, spec: PDFObject | undefined): string | undef
   const d = lookupDict(doc, spec);
   if (!d) return undefined;
   return pdfText(d.lookup(PDFName.of('UF'))) ?? pdfText(d.lookup(PDFName.of('F')));
+}
+
+/**
+ * AcroForm fields: values (/V, /DV), tooltips (/TU) and choice options (/Opt).
+ * A changed field also loses its appearance streams (they still draw the old value) and the form is flagged
+ * /NeedAppearances so viewers redraw it from the cleaned value.
+ */
+export function scanFormFields(doc: PDFDocument): { units: TextUnit[]; finalize: () => void; warnings: string[] } {
+  const units: TextUnit[] = [];
+  const warnings: string[] = [];
+  const af = lookupDict(doc, doc.catalog.get(PDFName.of('AcroForm')));
+  const fields = af && lookupArray(doc, af.get(PDFName.of('Fields')));
+  if (!af || !fields) return { units, finalize: () => {}, warnings };
+  if (af.get(PDFName.of('XFA'))) warnings.push('此 PDF 含 XFA 動態表單資料，其中的內容不會被檢查。');
+
+  const touched = new Set<PDFDict>();
+  const seen = new Set<PDFDict>();
+  const usedKeys = new Map<string, number>();
+  const keyFor = (k: string) => {
+    const n = usedKeys.get(k) ?? 0;
+    usedKeys.set(k, n + 1);
+    return n ? `${k}#${n}` : k;
+  };
+  const stringUnit = (field: PDFDict, name: string, label: string, get: () => string | undefined, set: (t: string) => void) => {
+    const value = get();
+    if (!value?.trim()) return;
+    units.push({
+      part: 'form',
+      key: keyFor(`${name}:${label}`),
+      location: 'formField',
+      where: `表單欄位「${name || '（未命名）'}」${label === 'V' || label === 'DV' ? '' : label === 'TU' ? '・提示文字' : '・選項'}`,
+      segments: [{ text: value }],
+      refs: [null],
+      write: ([t]) => {
+        set(t!);
+        touched.add(field);
+      },
+    });
+  };
+
+  const walk = (ref: PDFObject | undefined, parent: string, depth: number) => {
+    const d = lookupDict(doc, ref);
+    if (!d || seen.has(d) || depth > 32) return;
+    seen.add(d);
+    const t = pdfText(d.lookup(PDFName.of('T')));
+    const name = t ? (parent ? `${parent}.${t}` : t) : parent;
+    for (const key of ['V', 'DV', 'TU']) {
+      const k = PDFName.of(key);
+      const v = d.lookup(k);
+      if (v instanceof PDFArray) {
+        for (let i = 0; i < v.size(); i++) stringUnit(d, name, key, () => pdfText(v.lookup(i)), (s) => v.set(i, toPdfString(s)));
+      } else stringUnit(d, name, key, () => pdfText(v), (s) => d.set(k, toPdfString(s)));
+    }
+    const opt = lookupArray(doc, d.get(PDFName.of('Opt')));
+    if (opt) {
+      for (let i = 0; i < opt.size(); i++) {
+        const o = opt.lookup(i);
+        if (o instanceof PDFArray) {
+          // [export value, display text]
+          for (let j = 0; j < o.size(); j++) stringUnit(d, name, 'Opt', () => pdfText(o.lookup(j)), (s) => o.set(j, toPdfString(s)));
+        } else stringUnit(d, name, 'Opt', () => pdfText(o), (s) => opt.set(i, toPdfString(s)));
+      }
+    }
+    const kids = lookupArray(doc, d.get(PDFName.of('Kids')));
+    if (kids) for (let i = 0; i < kids.size(); i++) walk(kids.get(i), name, depth + 1);
+  };
+  for (let i = 0; i < fields.size(); i++) walk(fields.get(i), '', 0);
+
+  const finalize = () => {
+    if (!touched.size) return;
+    for (const field of touched) {
+      // the field itself may be a widget (merged dictionary), and widget kids carry their own appearance
+      field.delete(PDFName.of('AP'));
+      const kids = lookupArray(doc, field.get(PDFName.of('Kids')));
+      if (kids)
+        for (let i = 0; i < kids.size(); i++) {
+          const w = lookupDict(doc, kids.get(i));
+          if (w && !w.get(PDFName.of('T'))) w.delete(PDFName.of('AP'));
+        }
+    }
+    af.set(PDFName.of('NeedAppearances'), PDFBool.True);
+  };
+  return { units, finalize, warnings };
+}
+
+/**
+ * Tagged-PDF structure tree: accessibility text that screen readers and text extractors read —
+ * /Alt (alternative description, e.g. of a logo), /ActualText (replacement text), /T (title), /E (expansion).
+ */
+export function scanStructTree(doc: PDFDocument): TextUnit[] {
+  const root = lookupDict(doc, doc.catalog.get(PDFName.of('StructTreeRoot')));
+  if (!root) return [];
+  const units: TextUnit[] = [];
+  const seen = new Set<PDFDict>();
+  const LABEL: Record<string, string> = { Alt: '替代文字', ActualText: '實際文字', T: '標題', E: '縮寫展開' };
+  let n = 0;
+  let budget = 200_000; // pathological trees
+  const walk = (o: PDFObject | undefined, depth: number) => {
+    if (budget-- <= 0 || depth > 200) return;
+    const arr = lookupArray(doc, o);
+    if (arr) {
+      for (let i = 0; i < arr.size(); i++) walk(arr.get(i), depth + 1);
+      return;
+    }
+    const d = lookupDict(doc, o);
+    if (!d || seen.has(d)) return;
+    seen.add(d);
+    for (const key of Object.keys(LABEL)) {
+      const k = PDFName.of(key);
+      const value = pdfText(d.lookup(k));
+      if (!value?.trim()) continue;
+      const type = nameOf(d.lookup(PDFName.of('S'))) ?? '';
+      units.push({
+        part: 'struct',
+        key: `s${n++}:${key}`,
+        location: 'other',
+        where: `無障礙標籤・${LABEL[key]}${type ? `（${type}）` : ''}`,
+        segments: [{ text: value }],
+        refs: [null],
+        write: ([t]) => d.set(k, toPdfString(t!)),
+      });
+    }
+    walk(d.get(PDFName.of('K')), depth + 1);
+  };
+  walk(root.get(PDFName.of('K')), 0);
+  return units;
 }

@@ -74,9 +74,10 @@ export class OoxmlPackage {
     const src = text.slice(start, end).replace(/^<([\w:.-]+)/, (m) => `${m}${decls ? ` ${decls}` : ''}`);
     const doc = parseXml(src, path);
     let dirty = false;
-    const frag: Fragment = { el: doc.documentElement, touch: () => (dirty = true) };
+    let removed = false;
+    const frag: Fragment = { el: doc.documentElement, touch: () => (dirty = true), remove: () => (removed = true) };
     const list = this.patches.get(path) ?? [];
-    list.push({ start, end, get: () => (dirty ? stripRootDecls(new XMLSerializer().serializeToString(doc.documentElement), decls) : null) });
+    list.push({ start, end, get: () => (removed ? '' : dirty ? stripRootDecls(new XMLSerializer().serializeToString(doc.documentElement), decls) : null) });
     this.patches.set(path, list);
     this.fragments.set(key, frag);
     return frag;
@@ -259,6 +260,8 @@ export interface Fragment {
   el: Element;
   /** mark as changed so it is written back on save */
   touch: () => void;
+  /** delete the whole element from the part on save */
+  remove: () => void;
 }
 
 /** All namespace declarations of a part's root element, so fragments can be parsed with the same prefixes. */

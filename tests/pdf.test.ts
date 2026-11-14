@@ -132,6 +132,58 @@ describe('PDF logos', () => {
   });
 });
 
+describe('PDF form fields (AcroForm)', () => {
+  it('cleans field values, tooltips and choice options; unrelated fields keep value and appearance', async () => {
+    const input = load('form.pdf');
+    const { findings } = await pdfHandler.scan(input, ctx);
+    const form = findings.filter((f) => f.location === 'formField');
+    expect(form.map((f) => f.where)).toEqual(expect.arrayContaining(['表單欄位「classification」', '表單欄位「classification」・提示文字', '表單欄位「level」', '表單欄位「level」・選項']));
+    expect(form.some((f) => f.where.includes('owner'))).toBe(false);
+    const out = await pdfHandler.apply(input, ctx, new Set(findings.map((f) => f.id)));
+    expect((await pdfHandler.scan(out, ctx)).findings.filter((f) => f.location === 'formField')).toEqual([]);
+    expect(rawScan('pdf', out, compiled)).toEqual([]);
+    const { PDFDocument, PDFName } = await import('pdf-lib');
+    const doc = await PDFDocument.load(out);
+    const af = doc.catalog.lookup(PDFName.of('AcroForm')) as import('pdf-lib').PDFDict;
+    expect(String(af.get(PDFName.of('NeedAppearances')))).toBe('true');
+    const byName = Object.fromEntries(doc.getForm().getFields().map((f) => [f.getName(), f]));
+    expect(byName['owner']!.acroField.dict.get(PDFName.of('AP'))).toBeDefined(); // untouched field keeps its appearance
+    expect(byName['classification']!.acroField.dict.get(PDFName.of('AP'))).toBeUndefined();
+    expect(latin1(out)).toMatch(/Finance team/);
+    const t = pypdfText(out, 'form_clean.pdf');
+    if (t !== undefined) expect(t).toMatch(/Classification:/);
+  });
+});
+
+describe('tagged PDF structure tree', () => {
+  it('cleans accessibility text (/Alt of a logo) and keeps the tree', async () => {
+    const input = load('tagged.pdf');
+    const { findings } = await pdfHandler.scan(input, ctx);
+    const alt = findings.find((f) => f.where.startsWith('無障礙標籤・替代文字'))!;
+    expect(alt.matchText).toBe('Confidential');
+    const out = await pdfHandler.apply(input, ctx, new Set([alt.id]));
+    expect(latin1(out)).not.toMatch(/ACME Confidential logo/);
+    expect(latin1(out)).toMatch(/StructTreeRoot/);
+    const t = pypdfText(out, 'tagged_clean.pdf');
+    if (t !== undefined) expect(t).toMatch(/Quarterly report/);
+  });
+});
+
+describe('scanned PDF with OCR layer', () => {
+  it('removes the searchable OCR text but warns that the image still shows the label', async () => {
+    const { findings, warnings } = await pdfHandler.scan(load('scanned.pdf'), ctx);
+    expect(warnings.join()).toMatch(/第 1 頁是掃描影像/);
+    const ocr = findings.find((f) => f.matchText === 'CONFIDENTIAL')!;
+    expect(ocr.note).toMatch(/OCR 隱形文字層/);
+  });
+
+  it('ordinary PDFs with pictures are not called scans', async () => {
+    for (const name of ['office.pdf', 'reportlab.pdf', 'tagged.pdf']) {
+      expect((await pdfHandler.scan(load(name), ctx)).warnings.join(), name).not.toMatch(/掃描影像/);
+    }
+  });
+});
+
 describe('PDF incremental updates', () => {
   it('drops stale revisions that still contain the label, even when nothing is selected', async () => {
     const input = load('incremental.pdf');

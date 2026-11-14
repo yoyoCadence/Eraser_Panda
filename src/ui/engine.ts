@@ -33,6 +33,8 @@ export interface DocState {
   result?: ScanResult;
   selected: Set<string>;
   output?: CleanOutput;
+  /** last cleaning attempt failed (the scan result is still valid) */
+  cleanError?: string;
 }
 
 /** Let the browser paint (spinners, progress) before a long synchronous step. */
@@ -48,25 +50,47 @@ export async function readAndScan(file: File, key: string, ctx: ScanContext, pat
     const handler = handlerFor(det.format);
     if (!handler) return patch(key, { status: 'error', format: det.format, bytes, error: '不支援的檔案格式。' });
     patch(key, { status: 'scanning', bytes, format: det.format });
-    await scanBytes(key, bytes, det.format, ctx, patch);
+    await scanBytes(key, bytes, det.format, { ...ctx, fileName: file.name }, patch);
   } catch (e) {
     patch(key, { status: 'error', error: errorMessage(e) });
   }
 }
 
-export async function scanBytes(key: string, bytes: Uint8Array, format: FormatId, ctx: ScanContext, patch: Patch): Promise<void> {
+/**
+ * Initial selection after a scan. On a RE-scan (rules changed) the user's decisions must survive: a finding the
+ * user had unchecked stays unchecked, one the user had checked stays checked — matched by finding id, which is
+ * stable for findings the rule change did not affect. New findings get their default.
+ */
+export function initialSelection(result: ScanResult, previous?: { result?: ScanResult; selected: Set<string> }): Set<string> {
+  const before = new Map((previous?.result?.findings ?? []).map((f) => [f.id, previous!.selected.has(f.id)]));
+  return new Set(
+    result.findings
+      .filter((f) => f.removable)
+      .filter((f) => (before.has(f.id) ? before.get(f.id)! : f.defaultSelected))
+      .map((f) => f.id),
+  );
+}
+
+export async function scanBytes(
+  key: string,
+  bytes: Uint8Array,
+  format: FormatId,
+  ctx: ScanContext,
+  patch: Patch,
+  previous?: { result?: ScanResult; selected: Set<string> },
+): Promise<void> {
   try {
     await yieldToUi();
     const result = await handlerFor(format)!.scan(bytes, ctx);
-    const selected = new Set(result.findings.filter((f) => f.removable && f.defaultSelected).map((f) => f.id));
-    patch(key, { status: 'ready', result, selected, output: undefined, error: undefined });
+    patch(key, { status: 'ready', result, selected: initialSelection(result, previous), output: undefined, error: undefined });
   } catch (e) {
     patch(key, { status: 'error', error: errorMessage(e) });
   }
 }
 
-export async function cleanDoc(doc: DocState, ctx: ScanContext): Promise<CleanOutput> {
+export async function cleanDoc(doc: DocState, baseCtx: ScanContext): Promise<CleanOutput> {
   const handler = handlerFor(doc.format!)!;
+  const ctx = { ...baseCtx, fileName: doc.name }; // same context as the scan, so removals match what was shown
   await yieldToUi();
   const ids = new Set([...doc.selected].filter((id) => doc.result!.findings.some((f) => f.id === id && f.removable)));
   const bytes = await handler.apply(doc.bytes!, ctx, ids);

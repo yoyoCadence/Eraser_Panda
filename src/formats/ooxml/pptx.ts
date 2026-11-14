@@ -1,8 +1,8 @@
 import type { LocationKind } from '../../core/types';
-import { chartsOf, collectChart, collectDmlParagraphs } from './drawingml';
+import { chartsOf, collectAltText, collectChart, collectDmlParagraphs } from './drawingml';
 import { markDirtyOnWrite } from './metadata';
 import type { OoxmlPackage } from './package';
-import { elementUnit, partNumber, type TextUnit } from './units';
+import { attrUnit, elementUnit, partNumber, type TextUnit } from './units';
 import { NS, closest, els, firstChildEl } from './xml';
 
 const REL_DOC = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument';
@@ -61,6 +61,12 @@ export function collectPptx(pkg: OoxmlPackage): TextUnit[] {
     if (!ctx) continue;
 
     units.push(...collectDmlParagraphs(pkg, path, { ...ctx, refine: refineFooter(ctx.where) }));
+    units.push(...collectAltText(pkg, path, ctx.where, ctx.page));
+    // layout / master names are shown in PowerPoint's layout picker and referenced by nothing else
+    if (ctx.location === 'master') {
+      const cSld = els(pkg.xml(path)!, NS.p, 'cSld')[0];
+      if (cSld?.getAttribute('name')) units.push(markDirtyOnWrite(pkg, path, attrUnit(cSld, 'name', { part: path, key: 'cSld:name', location: 'master', where: `${ctx.where}・名稱` })));
+    }
     for (const ch of chartsOf(pkg, path)) units.push(...collectChart(pkg, ch, `${ctx.where}・圖表`, ctx.page));
   }
   return units;

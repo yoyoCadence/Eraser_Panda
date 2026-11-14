@@ -162,7 +162,11 @@ export function scanPageText(doc: PDFDocument, compiled: CompiledRules): PdfText
       kind: cls.location === 'watermark' ? 'watermark' : 'text',
       segments,
       refs: segments.map(() => null),
-      note: formPages > 1 ? `此內容是共用物件，會同時從 ${formPages} 頁移除` : undefined,
+      note: line.runs.every((r) => r.invisible)
+        ? '這是掃描影像上的 OCR 隱形文字層：只會移除可搜尋的文字，影像本身看得到的字無法移除'
+        : formPages > 1
+          ? `此內容是共用物件，會同時從 ${formPages} 頁移除`
+          : undefined,
     };
     units.push(unit);
     meta.set(unit, { line, segRun, glyphStarts });

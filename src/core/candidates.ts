@@ -32,6 +32,8 @@ export interface TextUnit {
   note?: string;
   /** Extra confidence override (e.g. header/footer/watermark text is always a label). */
   confidence?: Confidence;
+  /** Hits are reported but never removed automatically (removal would break the file); the text explains why. */
+  reportOnly?: string;
 }
 
 /** A finding plus the closure that removes it from the loaded package. */
@@ -95,11 +97,11 @@ export function unitCandidates(units: readonly TextUnit[], compiled: CompiledRul
           page: unit.page,
           part: unit.part,
           confidence,
-          removable: true,
-          defaultSelected: true,
-          note: unit.note ?? (unit.location === 'body' && !h.wholeUnit ? '位於內文語句中，刪除可能改變語意' : undefined),
+          removable: !unit.reportOnly,
+          defaultSelected: !unit.reportOnly,
+          note: unit.reportOnly ?? unit.note ?? (unit.location === 'body' && !h.wholeUnit ? '位於內文語句中，刪除可能改變語意' : undefined),
         },
-        cut: { unit, pieces: h.pieces },
+        cut: unit.reportOnly ? undefined : { unit, pieces: h.pieces },
         span: { unit, start: h.start, end: h.end },
       });
     }

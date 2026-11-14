@@ -51,6 +51,10 @@ describe.each([
   ['sample.docx', docxHandler, 'docx'],
   ['sample.xlsx', xlsxHandler, 'xlsx'],
   ['sample.pptx', pptxHandler, 'pptx'],
+  // same documents re-saved by LibreOffice: a second producer (shared strings, other run splitting, …)
+  ['sample_lo.docx', docxHandler, 'docx'],
+  ['sample_lo.xlsx', xlsxHandler, 'xlsx'],
+  ['sample_lo.pptx', pptxHandler, 'pptx'],
 ] as const)('%s', (name, handler, ext) => {
   it('finding ids are unique and stable across scans', async () => {
     const a = await handler.scan(load(name), ctx);
@@ -123,6 +127,26 @@ describe('docx specifics', () => {
     expect(body).toMatch(/<w:t xml:space="preserve">This document contains information about the plan\.<\/w:t>/);
   });
 
+  it('keeps HYPERLINK fields (static) while still unlinking data fields', async () => {
+    const p = parts(load('sample.docx'));
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    p['word/document.xml'] = strToU8(
+      strFromU8(p['word/document.xml']!).replace(
+        '<w:sectPr',
+        `<w:p><w:fldSimple ${W} w:instr=" HYPERLINK &quot;https://example.com/report&quot; "><w:r><w:t>Confidential report</w:t></w:r></w:fldSimple></w:p>` +
+          `<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> HYPERLINK "https://example.com/x" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Secret plan</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p><w:sectPr`,
+      ),
+    );
+    const input = zipSync(p);
+    const { findings } = await docxHandler.scan(input, ctx);
+    const out = await docxHandler.apply(input, ctx, new Set(findings.filter((f) => f.removable && f.kind === 'text').map((f) => f.id)));
+    const body = part(out, 'word/document.xml')!;
+    expect(body).toMatch(/w:instr=" HYPERLINK &quot;https:\/\/example\.com\/report&quot; "><w:r><w:t xml:space="preserve">report<\/w:t>/);
+    expect(body).toMatch(/HYPERLINK "https:\/\/example\.com\/x"/); // complex hyperlink field kept
+    expect(body).not.toMatch(/DOCPROPERTY Status/); // the data field is still unlinked
+    assertOpens(out, 'docx');
+  });
+
   it('honours exceptions', async () => {
     const input = load('sample.docx');
     const { findings } = await docxHandler.scan(input, ctx);
@@ -152,6 +176,139 @@ describe('comment / revision authors', () => {
     for (const n of expected) expect(xml).not.toContain(n);
     expect(xml).toContain('Author');
     assertOpens(out, name.slice(-4) as 'docx' | 'xlsx');
+  });
+});
+
+describe('account ids next to author names', () => {
+  it('docx people.xml: presenceInfo (Office account e-mail) is removed, the part stays valid', async () => {
+    const p = parts(load('sample.docx'));
+    p['word/people.xml'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">' +
+        '<w15:person w15:author="Jane Doe"><w15:presenceInfo w15:providerId="AD" w15:userId="S::jane.doe@acme.example::1234"/></w15:person></w15:people>',
+    );
+    p['[Content_Types].xml'] = strToU8(
+      strFromU8(p['[Content_Types].xml']!).replace('</Types>', '<Override PartName="/word/people.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml"/></Types>'),
+    );
+    const input = zipSync(p);
+    const { findings } = await docxHandler.scan(input, ctx);
+    const f = findings.find((x) => x.id === 'authors#people')!;
+    const out = await docxHandler.apply(input, ctx, new Set([f.id]));
+    const people = strFromU8(parts(out)['word/people.xml']!);
+    expect(people).not.toMatch(/jane|Jane|acme|presenceInfo/);
+    expect(people).toMatch(/w15:author="Author"/);
+  });
+
+  it('pptx authors.xml: userId / providerId get valid placeholder values, never empty', async () => {
+    const p = parts(load('sample.pptx'));
+    p['ppt/authors.xml'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p188:authorLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main">' +
+        '<p188:author id="{1}" name="Jane Doe" initials="JD" userId="jane.doe@acme.example" providerId="AD"/></p188:authorLst>',
+    );
+    p['[Content_Types].xml'] = strToU8(
+      strFromU8(p['[Content_Types].xml']!).replace('</Types>', '<Override PartName="/ppt/authors.xml" ContentType="application/vnd.ms-powerpoint.authors+xml"/></Types>'),
+    );
+    const input = zipSync(p);
+    const { findings } = await pptxHandler.scan(input, ctx);
+    const f = findings.find((x) => x.id === 'authors#people')!;
+    expect(f.matchText).toContain('Jane Doe');
+    const out = await pptxHandler.apply(input, ctx, new Set([f.id]));
+    const authors = strFromU8(parts(out)['ppt/authors.xml']!);
+    expect(authors).not.toMatch(/jane|Jane|acme|""/);
+    expect(authors).toMatch(/name="Author"/);
+    expect(authors).toMatch(/providerId="None"/);
+  });
+});
+
+describe('alt text and Excel validation / conditional formats', () => {
+  it('docx / pptx picture alt text (descr / title) is cleaned', async () => {
+    for (const [name, handler, partRe] of [
+      ['sample.docx', docxHandler, /^word\/header1\.xml$/],
+      ['sample.pptx', pptxHandler, /^ppt\/slides\/slide1\.xml$/],
+    ] as const) {
+      const p = parts(load(name));
+      const part = Object.keys(p).find((k) => partRe.test(k))!;
+      p[part] = strToU8(strFromU8(p[part]!).replace(/(<(?:wp|p):(?:docPr|cNvPr) [^>]*?)name="([^"]*)"/, '$1name="$2" descr="ACME Confidential stamp" title="Internal Use Only"'));
+      const input = zipSync(p);
+      const { findings } = await handler.scan(input, ctx);
+      const alt = findings.filter((f) => f.where.includes('替代文字'));
+      expect(alt.map((f) => f.matchText).sort(), name).toEqual(['Confidential', 'Internal Use Only']);
+      const out = await handler.apply(input, ctx, new Set(alt.map((f) => f.id)));
+      const xml = strFromU8(parts(out)[part]!);
+      expect(xml, name).toMatch(/descr="ACME stamp"/);
+      expect(xml, name).not.toMatch(/Internal Use Only/);
+      assertOpens(out, name.slice(-4) as 'docx' | 'pptx');
+    }
+  });
+
+  it('xlsx data-validation lists / prompts are cut; conditional-format rules on a label are removed whole', async () => {
+    const p = parts(load('sample.xlsx'));
+    const sheet = strFromU8(p['xl/worksheets/sheet1.xml']!).replace(
+      '<pageMargins',
+      '<conditionalFormatting sqref="A1:D9"><cfRule type="containsText" dxfId="0" priority="1" operator="containsText" text="Confidential"><formula>NOT(ISERROR(SEARCH("Confidential",A1)))</formula></cfRule></conditionalFormatting>' +
+        '<dataValidations count="1"><dataValidation type="list" allowBlank="1" showInputMessage="1" promptTitle="Classification" prompt="Pick Confidential or Public" sqref="E1:E9"><formula1>"Confidential,Internal,Public"</formula1></dataValidation></dataValidations>' +
+        '<pageMargins',
+    );
+    p['xl/worksheets/sheet1.xml'] = strToU8(sheet);
+    const input = zipSync(p);
+    const { findings } = await xlsxHandler.scan(input, ctx);
+    const dv = findings.filter((f) => f.where.includes('資料驗證'));
+    const cf = findings.filter((f) => f.where.includes('條件式格式'));
+    expect(dv.length).toBeGreaterThanOrEqual(2);
+    expect(cf).toHaveLength(1);
+    const out = await xlsxHandler.apply(input, ctx, new Set([...dv, ...cf].map((f) => f.id)));
+    const x = strFromU8(parts(out)['xl/worksheets/sheet1.xml']!);
+    expect(x).toMatch(/<formula1>"Internal,Public"<\/formula1>/);
+    expect(x).toMatch(/prompt="Pick or Public"|prompt="Pick Public"|prompt="Pick  or Public"/);
+    expect(x).not.toMatch(/cfRule|conditionalFormatting/); // the rule (and its now-empty container) is gone
+    expect(/<dataValidations[\s\S]*<\/dataValidations>/.exec(x)![0]).not.toMatch(/Confidential/);
+    assertOpens(out, 'xlsx');
+  });
+});
+
+describe('Excel tables', () => {
+  it('table header names are report-only (cell text must keep matching tableColumn/@name and Tbl[...] refs); body cells are cleaned', async () => {
+    const input = load('table.xlsx');
+    const { findings } = await xlsxHandler.scan(input, ctx);
+    const header = findings.filter((f) => f.matchText === 'Sensitive' && /B1|表格欄位/.test(f.where + (f.note ?? '')));
+    expect(header.length).toBeGreaterThan(0);
+    for (const f of header) expect(f).toMatchObject({ removable: false, defaultSelected: false });
+    const body = findings.find((f) => f.where.includes('C2'))!;
+    expect(body.removable).toBe(true);
+    const out = await xlsxHandler.apply(input, ctx, new Set(findings.filter((f) => f.removable).map((f) => f.id)));
+    const p = parts(out);
+    expect(strFromU8(p['xl/tables/table1.xml']!)).toMatch(/name="Sensitive data"/);
+    const sheet = strFromU8(p['xl/worksheets/sheet1.xml']!);
+    expect(sheet).toMatch(/<c r="B1"[^>]*><is><t>Sensitive data<\/t>/);
+    expect(sheet).toMatch(/Tbl\[Sensitive data\]/);
+    expect(sheet).not.toMatch(/<c r="C2"[^>]*><is><t>Sensitive<\/t>/);
+    assertOpens(out, 'xlsx');
+  });
+});
+
+describe('names', () => {
+  it('xlsx defined names are report-only, their constant strings are cut; pptx layout names are cleaned', async () => {
+    const p = parts(load('sample.xlsx'));
+    p['xl/workbook.xml'] = strToU8(
+      strFromU8(p['xl/workbook.xml']!).replace('</workbook>', '<definedNames><definedName name="Confidential_Range">Data!$A$1:$B$2</definedName><definedName name="Label">"Internal Use Only"</definedName></definedNames></workbook>'),
+    );
+    const xin = zipSync(p);
+    const xf = (await xlsxHandler.scan(xin, ctx)).findings.filter((f) => f.where.includes('定義名稱'));
+    expect(xf.find((f) => f.where.includes('Confidential_Range'))).toMatchObject({ removable: false });
+    const val = xf.find((f) => f.where.includes('「Label」的值'))!;
+    const xout = await xlsxHandler.apply(xin, ctx, new Set([val.id]));
+    const wbx = strFromU8(parts(xout)['xl/workbook.xml']!);
+    expect(wbx).toMatch(/name="Confidential_Range"/);
+    expect(wbx).toMatch(/<definedName name="Label">""<\/definedName>/);
+    assertOpens(xout, 'xlsx');
+
+    const q = parts(load('sample.pptx'));
+    const layout = Object.keys(q).find((k) => /slideLayouts\/slideLayout1\.xml$/.test(k))!;
+    q[layout] = strToU8(strFromU8(q[layout]!).replace(/<p:cSld name="[^"]*"/, '<p:cSld name="Title Slide - Confidential"'));
+    const pin = zipSync(q);
+    const lf = (await pptxHandler.scan(pin, ctx)).findings.find((f) => f.where.endsWith('・名稱'))!;
+    const pout = await pptxHandler.apply(pin, ctx, new Set([lf.id]));
+    expect(strFromU8(parts(pout)[layout]!)).toMatch(/<p:cSld name="Title Slide"/);
+    assertOpens(pout, 'pptx');
   });
 });
 

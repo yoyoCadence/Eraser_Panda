@@ -125,6 +125,8 @@ export interface FormatHandler {
 /** Everything a handler needs besides the bytes. Kept as an object so later milestones can extend it. */
 export interface ScanContext {
   rules: Rule[];
+  /** Original file name (format-specific decisions, e.g. CSV vs. prose text). */
+  fileName?: string;
   /** Perceptual hashes (core/image.ts `logoHash`) of user-supplied logo samples. */
   logoHashes?: string[];
   /** Decoder for encoded images (JPEG …) — provided by the browser; PNG and raw PDF images are decoded in-engine. */
