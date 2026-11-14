@@ -1,7 +1,7 @@
 import type { LocationKind } from '../../core/types';
 import { markDirtyOnWrite } from './metadata';
 import type { OoxmlPackage } from './package';
-import { FALLBACK_NOTE, dmlParagraphSegments, elementUnit, isInFallback, type TextUnit } from './units';
+import { FALLBACK_NOTE, attrUnit, dmlParagraphSegments, elementUnit, isInFallback, type TextUnit } from './units';
 import { NS, closest, els, firstChildEl } from './xml';
 
 export interface DmlContext {
@@ -57,4 +57,27 @@ export function chartsOf(pkg: OoxmlPackage, part: string): string[] {
     .rels(part)
     .filter((r) => !r.external && /\/chart$/.test(r.type) && pkg.has(r.target))
     .map((r) => r.target);
+}
+
+/**
+ * Alternative text of pictures and shapes — read by screen readers, search, and DLP text extraction:
+ *   DrawingML wp:docPr / p:cNvPr / xdr:cNvPr / pic:cNvPr  @descr @title;  VML  @alt, v:imagedata @o:title.
+ */
+export function collectAltText(pkg: OoxmlPackage, path: string, where: string, page?: number): TextUnit[] {
+  const doc = pkg.xml(path);
+  if (!doc) return [];
+  const units: TextUnit[] = [];
+  let n = 0;
+  for (const el of Array.from(doc.getElementsByTagName('*'))) {
+    const attrs: string[] = [];
+    if (el.localName === 'docPr' || el.localName === 'cNvPr') attrs.push('descr', 'title');
+    else if (el.namespaceURI === NS.v && el.hasAttribute('alt')) attrs.push('alt');
+    else if (el.namespaceURI === NS.v && el.localName === 'imagedata' && el.hasAttributeNS(NS.o, 'title')) attrs.push('o:title');
+    for (const a of attrs) {
+      const value = a === 'o:title' ? el.getAttributeNS(NS.o, 'title') : el.getAttribute(a);
+      if (!value?.trim()) continue;
+      units.push(markDirtyOnWrite(pkg, path, attrUnit(el, a, { part: path, key: `alt${n++}`, location: 'other', where: `${where}・替代文字`, page })));
+    }
+  }
+  return units;
 }

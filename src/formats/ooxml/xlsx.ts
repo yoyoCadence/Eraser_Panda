@@ -1,6 +1,6 @@
 import { findHits, type CompiledRules } from '../../core/matcher';
 import type { Segment } from '../../core/segments';
-import { chartsOf, collectChart, collectDmlParagraphs } from './drawingml';
+import { chartsOf, collectAltText, collectChart, collectDmlParagraphs } from './drawingml';
 import { markDirtyOnWrite } from './metadata';
 import type { Fragment, OoxmlPackage } from './package';
 import { attrUnit, elementUnit, type Candidate, type SegRef, type TextUnit } from './units';
@@ -11,9 +11,9 @@ const REL_DOC = 'http://schemas.openxmlformats.org/officeDocument/2006/relations
 /** `<c …>…</c>` or `<c …/>` — attributes in group 1, body in group 2. */
 const CELL_RE = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
 
-const decodeXml = (s: string) =>
+/** XML entity decoding only — tags and attribute values are kept (cheap pre-checks on raw XML). */
+const decodeEntities = (s: string) =>
   s
-    .replace(/<[^>]+>/g, ' ')
     .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
     .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
     .replace(/&lt;/g, '<')
@@ -22,7 +22,13 @@ const decodeXml = (s: string) =>
     .replace(/&apos;/g, "'")
     .replace(/&amp;/g, '&');
 
+/** Text content of an XML snippet: tags dropped, entities decoded. */
+const decodeXml = (s: string) => decodeEntities(s.replace(/<[^>]+>/g, ' '));
+
 export const HF_RE = /<headerFooter\b[^>]*?(?:\/>|>[\s\S]*?<\/headerFooter>)/;
+const DV_RE = /<dataValidation\b[^>]*?(?:\/>|>[\s\S]*?<\/dataValidation>)/g;
+const CF_RE = /<conditionalFormatting\b[^>]*?>[\s\S]*?<\/conditionalFormatting>/g;
+
 
 /** Text a cell carries itself (inline string, formula literals, cached string result) — cheap pre-check. */
 function cellLocalText(attrs: string, body: string): string {
@@ -147,6 +153,48 @@ export function collectXlsx(pkg: OoxmlPackage, compiled: CompiledRules): { units
       }
     }
 
+    // ---- data validation: dropdown lists ("Confidential,Internal,Public") and input / error messages ----
+    for (const m of xml.matchAll(DV_RE)) {
+      if (!findHits(decodeEntities(m[0]), compiled).length) continue;
+      const frag = pkg.fragment(sh.path, m.index!, m.index! + m[0].length);
+      const where = `${sh.name}・資料驗證（${frag.el.getAttribute('sqref') ?? ''}）`;
+      for (const a of ['promptTitle', 'prompt', 'errorTitle', 'error']) {
+        if (frag.el.getAttribute(a)) units.push(touchOnWrite(frag, attrUnit(frag.el, a, { part: sh.path, key: `dv${m.index}:${a}`, location: 'other', where, page: sh.index })));
+      }
+      for (const f of childEls(frag.el, NS.s).filter((c) => c.localName === 'formula1' || c.localName === 'formula2')) {
+        const u = formulaUnit(frag.touch, sh.path, f, { key: `dv${m.index}:${f.localName}`, where, page: sh.index });
+        if (u) units.push(u);
+      }
+    }
+
+    // ---- conditional formatting: a rule keyed on a label is removed whole ----
+    // Cutting only the text would turn SEARCH("Confidential",A1) into SEARCH("",A1), which matches every cell.
+    for (const m of xml.matchAll(CF_RE)) {
+      if (!findHits(decodeEntities(m[0]), compiled).length) continue;
+      const frag = pkg.fragment(sh.path, m.index!, m.index! + m[0].length);
+      childEls(frag.el, NS.s, 'cfRule').forEach((rule, i) => {
+        const formulas = childEls(rule, NS.s, 'formula').map((f) => f.textContent ?? '');
+        units.push({
+          part: sh.path,
+          key: `cf${m.index}:${i}`,
+          location: 'other',
+          kind: 'text',
+          where: `${sh.name}・條件式格式（${frag.el.getAttribute('sqref') ?? ''}）`,
+          page: sh.index,
+          segments: [{ text: rule.getAttribute('text') ?? '' }, ...formulas.flatMap((t) => [{ text: '\n', virtual: true }, { text: t }])],
+          refs: [null, ...formulas.flatMap(() => [null, null])],
+          wholeObject: {
+            label: '整條條件式格式規則將被移除（只刪字眼會讓規則套用到所有儲存格）',
+            remove: () => {
+              rule.parentNode?.removeChild(rule);
+              if (!childEls(frag.el, NS.s, 'cfRule').length) frag.remove();
+              else frag.touch();
+            },
+          },
+        });
+      });
+    }
+
     // ---- related parts: comments, threaded comments, drawings (+charts) ----
     for (const rel of pkg.rels(sh.path)) {
       if (rel.external || !pkg.has(rel.target)) continue;
@@ -154,6 +202,7 @@ export function collectXlsx(pkg: OoxmlPackage, compiled: CompiledRules): { units
       else if (/\/threadedComment$/.test(rel.type)) units.push(...collectThreaded(pkg, rel.target, sh));
       else if (/\/drawing$/.test(rel.type)) {
         units.push(...collectDmlParagraphs(pkg, rel.target, { location: 'textbox', where: `${sh.name}・圖形文字`, page: sh.index }));
+        units.push(...collectAltText(pkg, rel.target, sh.name, sh.index));
         for (const ch of chartsOf(pkg, rel.target)) units.push(...collectChart(pkg, ch, `${sh.name}・圖表`, sh.index));
       }
     }

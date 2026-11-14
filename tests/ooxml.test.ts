@@ -195,6 +195,52 @@ describe('account ids next to author names', () => {
   });
 });
 
+describe('alt text and Excel validation / conditional formats', () => {
+  it('docx / pptx picture alt text (descr / title) is cleaned', async () => {
+    for (const [name, handler, partRe] of [
+      ['sample.docx', docxHandler, /^word\/header1\.xml$/],
+      ['sample.pptx', pptxHandler, /^ppt\/slides\/slide1\.xml$/],
+    ] as const) {
+      const p = parts(load(name));
+      const part = Object.keys(p).find((k) => partRe.test(k))!;
+      p[part] = strToU8(strFromU8(p[part]!).replace(/(<(?:wp|p):(?:docPr|cNvPr) [^>]*?)name="([^"]*)"/, '$1name="$2" descr="ACME Confidential stamp" title="Internal Use Only"'));
+      const input = zipSync(p);
+      const { findings } = await handler.scan(input, ctx);
+      const alt = findings.filter((f) => f.where.includes('替代文字'));
+      expect(alt.map((f) => f.matchText).sort(), name).toEqual(['Confidential', 'Internal Use Only']);
+      const out = await handler.apply(input, ctx, new Set(alt.map((f) => f.id)));
+      const xml = strFromU8(parts(out)[part]!);
+      expect(xml, name).toMatch(/descr="ACME stamp"/);
+      expect(xml, name).not.toMatch(/Internal Use Only/);
+      assertOpens(out, name.slice(-4) as 'docx' | 'pptx');
+    }
+  });
+
+  it('xlsx data-validation lists / prompts are cut; conditional-format rules on a label are removed whole', async () => {
+    const p = parts(load('sample.xlsx'));
+    const sheet = strFromU8(p['xl/worksheets/sheet1.xml']!).replace(
+      '<pageMargins',
+      '<conditionalFormatting sqref="A1:D9"><cfRule type="containsText" dxfId="0" priority="1" operator="containsText" text="Confidential"><formula>NOT(ISERROR(SEARCH("Confidential",A1)))</formula></cfRule></conditionalFormatting>' +
+        '<dataValidations count="1"><dataValidation type="list" allowBlank="1" showInputMessage="1" promptTitle="Classification" prompt="Pick Confidential or Public" sqref="E1:E9"><formula1>"Confidential,Internal,Public"</formula1></dataValidation></dataValidations>' +
+        '<pageMargins',
+    );
+    p['xl/worksheets/sheet1.xml'] = strToU8(sheet);
+    const input = zipSync(p);
+    const { findings } = await xlsxHandler.scan(input, ctx);
+    const dv = findings.filter((f) => f.where.includes('資料驗證'));
+    const cf = findings.filter((f) => f.where.includes('條件式格式'));
+    expect(dv.length).toBeGreaterThanOrEqual(2);
+    expect(cf).toHaveLength(1);
+    const out = await xlsxHandler.apply(input, ctx, new Set([...dv, ...cf].map((f) => f.id)));
+    const x = strFromU8(parts(out)['xl/worksheets/sheet1.xml']!);
+    expect(x).toMatch(/<formula1>"Internal,Public"<\/formula1>/);
+    expect(x).toMatch(/prompt="Pick or Public"|prompt="Pick Public"|prompt="Pick  or Public"/);
+    expect(x).not.toMatch(/cfRule|conditionalFormatting/); // the rule (and its now-empty container) is gone
+    expect(/<dataValidations[\s\S]*<\/dataValidations>/.exec(x)![0]).not.toMatch(/Confidential/);
+    assertOpens(out, 'xlsx');
+  });
+});
+
 describe('logos', () => {
   const media = (bytes: Uint8Array) => Object.keys(parts(bytes)).filter((k) => /\/media\//.test(k)).sort();
 

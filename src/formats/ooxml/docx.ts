@@ -1,4 +1,5 @@
 import type { LocationKind } from '../../core/types';
+import { collectAltText } from './drawingml';
 import { markDirtyOnWrite } from './metadata';
 import type { OoxmlPackage } from './package';
 import { FALLBACK_NOTE, attrUnit, isInFallback, partNumber, wmlParagraphSegments, type TextUnit } from './units';
@@ -59,6 +60,8 @@ export function collectDocx(pkg: OoxmlPackage): TextUnit[] {
       if (!it.textContent?.trim()) return;
       units.push(markDirtyOnWrite(pkg, path, { part: path, key: `fld${i}`, location: 'other', where: `${partName}・欄位代碼`, segments: [{ text: it.textContent }], refs: [{ el: it }] }));
     });
+
+    units.push(...collectAltText(pkg, path, partName));
 
     // ---- VML WordArt watermarks (Design → Watermark) ----
     els(doc, NS.v, 'textpath').forEach((tp, i) => {
