@@ -76,7 +76,7 @@ export function App() {
       for (const d of docsRef.current) {
         if (d.bytes && d.format && (d.status === 'ready' || d.status === 'done')) {
           patch(d.key, { status: 'scanning' });
-          await scanBytes(d.key, d.bytes, d.format, scanCtx, patch);
+          await scanBytes(d.key, d.bytes, d.format, { ...scanCtx, fileName: d.name }, patch);
         }
       }
     })();

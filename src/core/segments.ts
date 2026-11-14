@@ -47,12 +47,20 @@ export function joinSegments(segments: readonly Segment[]): { joined: string; of
   return { joined, offsets };
 }
 
-export function matchSegments(segments: readonly Segment[], compiled: CompiledRules, tidy = true): SegmentHit[] {
+/**
+ * How much surrounding text a removal may take with it:
+ *   'full'   — whitespace, separators, brackets (prose: headers, paragraphs, PDF lines)
+ *   'spaces' — one adjacent space only (delimited data such as CSV, where a separator is structure, not prose)
+ *   'none'   — exactly the hit
+ */
+export type TidyMode = 'full' | 'spaces' | 'none';
+
+export function matchSegments(segments: readonly Segment[], compiled: CompiledRules, tidy: TidyMode = 'full'): SegmentHit[] {
   const { joined, offsets } = joinSegments(segments);
   const hits = findHits(joined, compiled);
   let lastEnd = 0;
   return hits.map((h) => {
-    let [cs, ce] = tidy ? tidyRange(joined, h.start, h.end) : [h.start, h.end];
+    let [cs, ce] = tidy === 'full' ? tidyRange(joined, h.start, h.end) : tidy === 'spaces' ? tidySpaces(joined, h.start, h.end) : [h.start, h.end];
     // widened ranges of neighbouring hits must never overlap (a character can only be cut once)
     cs = Math.max(cs, lastEnd);
     lastEnd = ce;
@@ -110,11 +118,18 @@ export function tidyRange(text: string, start: number, end: number): [number, nu
   if (L !== null && SEP_LEFT.test(L) && (R === null || END_PUNCT.test(R))) return [skipWsLeft(ls - 1), end];
   // "is secret." → "is."
   if (R !== null && END_PUNCT.test(R) && re === end && ls < start) return [ls, end];
-  // plain spaces
+  return tidySpaces(text, start, end, WS);
+}
+
+/** Spaces only — a tab is a column separator in TSV. */
+const SPACE = /[ \u00a0\u3000]/;
+
+/** Absorb at most one adjacent space ("a SECRET b" → "a b"), never separators, brackets or tabs. */
+export function tidySpaces(text: string, start: number, end: number, ws: RegExp = SPACE): [number, number] {
   const before = start === 0 ? null : text[start - 1]!;
   const after = end >= text.length ? null : text[end]!;
-  if (after !== null && WS.test(after) && (before === null || WS.test(before))) return [start, end + 1];
-  if (after === null && before !== null && WS.test(before)) return [start - 1, end];
+  if (after !== null && ws.test(after) && (before === null || ws.test(before))) return [start, end + 1];
+  if (after === null && before !== null && ws.test(before)) return [start - 1, end];
   return [start, end];
 }
 

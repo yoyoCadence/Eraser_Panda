@@ -48,7 +48,7 @@ export async function readAndScan(file: File, key: string, ctx: ScanContext, pat
     const handler = handlerFor(det.format);
     if (!handler) return patch(key, { status: 'error', format: det.format, bytes, error: '不支援的檔案格式。' });
     patch(key, { status: 'scanning', bytes, format: det.format });
-    await scanBytes(key, bytes, det.format, ctx, patch);
+    await scanBytes(key, bytes, det.format, { ...ctx, fileName: file.name }, patch);
   } catch (e) {
     patch(key, { status: 'error', error: errorMessage(e) });
   }
@@ -65,8 +65,9 @@ export async function scanBytes(key: string, bytes: Uint8Array, format: FormatId
   }
 }
 
-export async function cleanDoc(doc: DocState, ctx: ScanContext): Promise<CleanOutput> {
+export async function cleanDoc(doc: DocState, baseCtx: ScanContext): Promise<CleanOutput> {
   const handler = handlerFor(doc.format!)!;
+  const ctx = { ...baseCtx, fileName: doc.name }; // same context as the scan, so removals match what was shown
   await yieldToUi();
   const ids = new Set([...doc.selected].filter((id) => doc.result!.findings.some((f) => f.id === id && f.removable)));
   const bytes = await handler.apply(doc.bytes!, ctx, ids);

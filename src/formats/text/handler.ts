@@ -50,14 +50,30 @@ function encodeText(text: string, d: Decoded): Uint8Array {
   return out;
 }
 
+/**
+ * Delimited data (CSV / TSV / semicolon CSV): by extension, or because the first lines all contain the same
+ * non-zero number of one delimiter. In delimited data a separator is structure — removing one shifts columns.
+ */
+export function isDelimited(text: string, fileName?: string): boolean {
+  if (fileName && /\.(csv|tsv|tab)$/i.test(fileName)) return true;
+  if (fileName && /\.(txt|md|markdown|log)$/i.test(fileName)) return false;
+  const lines = text.split(/\r?\n/).filter((l) => l.trim()).slice(0, 20);
+  if (lines.length < 2) return false;
+  return [',', '\t', ';', '|'].some((d) => {
+    const counts = lines.map((l) => l.split(d).length - 1);
+    return counts[0]! > 0 && counts.every((c) => c === counts[0]);
+  });
+}
+
 function analyse(bytes: Uint8Array, ctx: ScanContext) {
   const decoded = decodeText(bytes);
   const compiled = compileRules(ctx.rules);
+  const tidy = isDelimited(decoded.text, ctx.fileName) ? 'spaces' : 'full';
   const lines = decoded.text.split(/(?<=\n)/);
   const findings: Finding[] = [];
   const cuts = new Map<string, { line: number; pieces: Piece[] }>();
   lines.forEach((line, i) => {
-    for (const h of matchSegments([{ text: line.replace(/\r?\n$/, '') }], compiled)) {
+    for (const h of matchSegments([{ text: line.replace(/\r?\n$/, '') }], compiled, tidy)) {
       const id = `L${i + 1}:${h.start}-${h.end}`;
       findings.push({
         id,
