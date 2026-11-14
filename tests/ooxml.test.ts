@@ -245,6 +245,53 @@ describe('alt text and Excel validation / conditional formats', () => {
   });
 });
 
+describe('Excel tables', () => {
+  it('table header names are report-only (cell text must keep matching tableColumn/@name and Tbl[...] refs); body cells are cleaned', async () => {
+    const input = load('table.xlsx');
+    const { findings } = await xlsxHandler.scan(input, ctx);
+    const header = findings.filter((f) => f.matchText === 'Sensitive' && /B1|表格欄位/.test(f.where + (f.note ?? '')));
+    expect(header.length).toBeGreaterThan(0);
+    for (const f of header) expect(f).toMatchObject({ removable: false, defaultSelected: false });
+    const body = findings.find((f) => f.where.includes('C2'))!;
+    expect(body.removable).toBe(true);
+    const out = await xlsxHandler.apply(input, ctx, new Set(findings.filter((f) => f.removable).map((f) => f.id)));
+    const p = parts(out);
+    expect(strFromU8(p['xl/tables/table1.xml']!)).toMatch(/name="Sensitive data"/);
+    const sheet = strFromU8(p['xl/worksheets/sheet1.xml']!);
+    expect(sheet).toMatch(/<c r="B1"[^>]*><is><t>Sensitive data<\/t>/);
+    expect(sheet).toMatch(/Tbl\[Sensitive data\]/);
+    expect(sheet).not.toMatch(/<c r="C2"[^>]*><is><t>Sensitive<\/t>/);
+    assertOpens(out, 'xlsx');
+  });
+});
+
+describe('names', () => {
+  it('xlsx defined names are report-only, their constant strings are cut; pptx layout names are cleaned', async () => {
+    const p = parts(load('sample.xlsx'));
+    p['xl/workbook.xml'] = strToU8(
+      strFromU8(p['xl/workbook.xml']!).replace('</workbook>', '<definedNames><definedName name="Confidential_Range">Data!$A$1:$B$2</definedName><definedName name="Label">"Internal Use Only"</definedName></definedNames></workbook>'),
+    );
+    const xin = zipSync(p);
+    const xf = (await xlsxHandler.scan(xin, ctx)).findings.filter((f) => f.where.includes('定義名稱'));
+    expect(xf.find((f) => f.where.includes('Confidential_Range'))).toMatchObject({ removable: false });
+    const val = xf.find((f) => f.where.includes('「Label」的值'))!;
+    const xout = await xlsxHandler.apply(xin, ctx, new Set([val.id]));
+    const wbx = strFromU8(parts(xout)['xl/workbook.xml']!);
+    expect(wbx).toMatch(/name="Confidential_Range"/);
+    expect(wbx).toMatch(/<definedName name="Label">""<\/definedName>/);
+    assertOpens(xout, 'xlsx');
+
+    const q = parts(load('sample.pptx'));
+    const layout = Object.keys(q).find((k) => /slideLayouts\/slideLayout1\.xml$/.test(k))!;
+    q[layout] = strToU8(strFromU8(q[layout]!).replace(/<p:cSld name="[^"]*"/, '<p:cSld name="Title Slide - Confidential"'));
+    const pin = zipSync(q);
+    const lf = (await pptxHandler.scan(pin, ctx)).findings.find((f) => f.where.endsWith('・名稱'))!;
+    const pout = await pptxHandler.apply(pin, ctx, new Set([lf.id]));
+    expect(strFromU8(parts(pout)[layout]!)).toMatch(/<p:cSld name="Title Slide"/);
+    assertOpens(pout, 'pptx');
+  });
+});
+
 describe('logos', () => {
   const media = (bytes: Uint8Array) => Object.keys(parts(bytes)).filter((k) => /\/media\//.test(k)).sort();
 

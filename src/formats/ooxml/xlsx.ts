@@ -26,6 +26,54 @@ const decodeEntities = (s: string) =>
 const decodeXml = (s: string) => decodeEntities(s.replace(/<[^>]+>/g, ' '));
 
 export const HF_RE = /<headerFooter\b[^>]*?(?:\/>|>[\s\S]*?<\/headerFooter>)/;
+const TABLE_HEADER_NOTE = 'Excel 表格的欄位名稱：必須與表格定義及公式中的 Tbl[欄位] 參照一致，自動修改會損壞活頁簿。請在 Excel 中手動重新命名此欄位。';
+
+/** "A1:C3" → column/row bounds. */
+function parseRange(ref: string): { c0: number; r0: number; c1: number; r1: number } | null {
+  const m = /^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(ref.replace(/\$/g, ''));
+  if (!m) return null;
+  const col = (s: string) => [...s].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+  return { c0: col(m[1]!), r0: Number(m[2]), c1: col(m[3] ?? m[1]!), r1: Number(m[4] ?? m[2]) };
+}
+
+function colName(n: number): string {
+  let s = '';
+  for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+}
+
+/** Excel tables on a sheet (small parts, parsed as DOM). */
+function tablesOf(pkg: OoxmlPackage, sheetPath: string): Array<{ path: string; doc: Document }> {
+  return pkg
+    .rels(sheetPath)
+    .filter((r) => !r.external && /\/table$/.test(r.type) && pkg.has(r.target))
+    .flatMap((r) => {
+      const doc = pkg.xml(r.target);
+      return doc ? [{ path: r.target, doc }] : [];
+    });
+}
+
+/** Cell refs of every table header row on a sheet. */
+function tableHeaderCells(pkg: OoxmlPackage, sheetPath: string): Set<string> {
+  const out = new Set<string>();
+  for (const { doc } of tablesOf(pkg, sheetPath)) {
+    const t = doc.documentElement;
+    if (t.getAttribute('headerRowCount') === '0') continue;
+    const r = parseRange(t.getAttribute('ref') ?? '');
+    if (r) for (let c = r.c0; c <= r.c1; c++) out.add(`${colName(c)}${r.r0}`);
+  }
+  return out;
+}
+
+/** Table column names themselves (report-only, same reason as their header cells). */
+function tableColumnUnits(pkg: OoxmlPackage, sh: SheetInfo): TextUnit[] {
+  return tablesOf(pkg, sh.path).flatMap(({ path, doc }) =>
+    els(doc, NS.s, 'tableColumn').map((col, i) =>
+      attrUnit(col, 'name', { part: path, key: `col${i}`, location: 'other', where: `${sh.name}・表格「${doc.documentElement.getAttribute('displayName') ?? ''}」欄位名稱`, page: sh.index, reportOnly: TABLE_HEADER_NOTE }),
+    ),
+  );
+}
+
 const SI_RE = /<si\b[^>]*?(?:\/>|>[\s\S]*?<\/si>)/g;
 const DV_RE = /<dataValidation\b[^>]*?(?:\/>|>[\s\S]*?<\/dataValidation>)/g;
 const CF_RE = /<conditionalFormatting\b[^>]*?>[\s\S]*?<\/conditionalFormatting>/g;
@@ -96,9 +144,13 @@ export function collectXlsx(pkg: OoxmlPackage, compiled: CompiledRules): { units
   const ssRefs = new Map<number, string[]>(); // shared string index → cell refs
   const ssFirstSheet = new Map<number, number>();
 
+  const headerSi = new Set<number>(); // shared strings used as Excel-table column names
+
   for (const sh of sheetList) {
     const xml = pkg.text(sh.path) ?? '';
     const label = (ref: string) => `${sh.name}!${ref}`;
+    const headers = tableHeaderCells(pkg, sh.path);
+    units.push(...tableColumnUnits(pkg, sh));
 
     // Shared-string references are collected with a regex: worksheets can hold millions of cells and a DOM of
     // them does not fit in memory. The DOM is only built when the sheet itself contains a hit (below).
@@ -108,6 +160,7 @@ export function collectXlsx(pkg: OoxmlPackage, compiled: CompiledRules): { units
       const idx = Number(/<v>(\d+)<\/v>/.exec(m[2] ?? '')?.[1]);
       if (!Number.isInteger(idx)) continue;
       const ref = /\br="([A-Z]+\d+)"/.exec(attrs)?.[1] ?? '?';
+      if (headers.has(ref)) headerSi.add(idx);
       const list = ssRefs.get(idx);
       if (list) list.push(label(ref));
       else {
@@ -128,7 +181,7 @@ export function collectXlsx(pkg: OoxmlPackage, compiled: CompiledRules): { units
       const t = c.getAttribute('t');
       if (t === 'inlineStr') {
         const is = firstChildEl(c, NS.s, 'is');
-        if (is) units.push(touchOnWrite(frag, richTextUnit(is, { part: sh.path, key: `is:${ref}`, location: 'body', where: label(ref), page: sh.index })));
+        if (is) units.push(touchOnWrite(frag, richTextUnit(is, { part: sh.path, key: `is:${ref}`, location: 'body', where: label(ref), page: sh.index, reportOnly: headers.has(ref) ? TABLE_HEADER_NOTE : undefined })));
       }
       const f = firstChildEl(c, NS.s, 'f');
       if (f?.textContent?.includes('"')) {
@@ -240,8 +293,20 @@ export function collectXlsx(pkg: OoxmlPackage, compiled: CompiledRules): { units
       const frag = pkg.fragment(ssPath, m.index!, m.index! + m[0].length);
       const refs = ssRefs.get(i);
       const where = refs ? (refs.length > 1 ? `${refs[0]} 等 ${refs.length} 個儲存格` : refs[0]!) : '共用字串（未被儲存格使用）';
-      units.push(touchOnWrite(frag, richTextUnit(frag.el, { part: ssPath, key: `si${i}`, location: 'body', where, page: ssFirstSheet.get(i) })));
+      units.push(touchOnWrite(frag, richTextUnit(frag.el, { part: ssPath, key: `si${i}`, location: 'body', where, page: ssFirstSheet.get(i), reportOnly: headerSi.has(i) ? TABLE_HEADER_NOTE : undefined })));
     }
+  }
+
+  // ---- defined names: the name is referenced by formulas (report-only); constant strings in the value are cut ----
+  const wbDoc = pkg.xml(wb);
+  if (wbDoc) {
+    els(wbDoc, NS.s, 'definedName').forEach((dn, i) => {
+      const name = dn.getAttribute('name') ?? '';
+      if (name.startsWith('_xlnm.')) return; // built-ins: print areas, filters
+      units.push(attrUnit(dn, 'name', { part: wb, key: `dn${i}:name`, location: 'other', where: `定義名稱「${name}」`, reportOnly: '定義名稱會被公式參照，自動改名會破壞活頁簿。請在 Excel 的「名稱管理員」中手動修改。' }));
+      const u = formulaUnit(() => pkg.markDirty(wb), wb, dn, { key: `dn${i}:value`, where: `定義名稱「${name}」的值`, page: 0 });
+      if (u) units.push(u);
+    });
   }
 
   // ---- pivot caches: copies of source data strings ----

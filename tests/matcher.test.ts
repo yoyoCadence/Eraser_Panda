@@ -32,6 +32,12 @@ describe('findHits — default rules', () => {
     expect(texts('confidentiality agreement')).toEqual([]);
   });
 
+  it('treats underscores as separators (file names, identifiers)', () => {
+    expect(texts('ACME_Confidential_2024.docx')).toEqual(['Confidential']);
+    expect(texts('confidential_logo.png')).toEqual(['confidential']);
+    expect(texts('NonConfidential')).toEqual([]);
+  });
+
   it('matches Latin labels glued to CJK text', () => {
     expect(texts('本文件為Confidential等級')).toEqual(['Confidential']);
   });
