@@ -51,6 +51,10 @@ describe.each([
   ['sample.docx', docxHandler, 'docx'],
   ['sample.xlsx', xlsxHandler, 'xlsx'],
   ['sample.pptx', pptxHandler, 'pptx'],
+  // same documents re-saved by LibreOffice: a second producer (shared strings, other run splitting, …)
+  ['sample_lo.docx', docxHandler, 'docx'],
+  ['sample_lo.xlsx', xlsxHandler, 'xlsx'],
+  ['sample_lo.pptx', pptxHandler, 'pptx'],
 ] as const)('%s', (name, handler, ext) => {
   it('finding ids are unique and stable across scans', async () => {
     const a = await handler.scan(load(name), ctx);

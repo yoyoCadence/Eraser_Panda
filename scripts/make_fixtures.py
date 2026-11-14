@@ -287,9 +287,27 @@ def make_pptx():
     open(os.path.join(OUT, "sample.pptx"), "wb").write(data)
 
 
+def make_libreoffice_variants():
+    """The same documents re-saved by LibreOffice: a second producer with a different XML style
+    (shared strings, different run splitting, header variants)."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    tmp = tempfile.mkdtemp()
+    for ext in ("docx", "xlsx", "pptx"):
+        src = os.path.join(tmp, f"src.{ext}")
+        shutil.copy(os.path.join(OUT, f"sample.{ext}"), src)
+        outdir = os.path.join(tmp, ext)
+        subprocess.run(["soffice", "--headless", "--convert-to", ext, "--outdir", outdir, src], check=True, capture_output=True, timeout=180)
+        shutil.copy(os.path.join(outdir, f"src.{ext}"), os.path.join(OUT, f"sample_lo.{ext}"))
+    shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     make_images()
     make_docx()
     make_xlsx()
     make_pptx()
+    make_libreoffice_variants()
     print("fixtures written to", os.path.abspath(OUT))

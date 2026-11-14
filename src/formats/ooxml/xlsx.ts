@@ -26,6 +26,7 @@ const decodeEntities = (s: string) =>
 const decodeXml = (s: string) => decodeEntities(s.replace(/<[^>]+>/g, ' '));
 
 export const HF_RE = /<headerFooter\b[^>]*?(?:\/>|>[\s\S]*?<\/headerFooter>)/;
+const SI_RE = /<si\b[^>]*?(?:\/>|>[\s\S]*?<\/si>)/g;
 const DV_RE = /<dataValidation\b[^>]*?(?:\/>|>[\s\S]*?<\/dataValidation>)/g;
 const CF_RE = /<conditionalFormatting\b[^>]*?>[\s\S]*?<\/conditionalFormatting>/g;
 
@@ -229,14 +230,18 @@ export function collectXlsx(pkg: OoxmlPackage, compiled: CompiledRules): { units
   }
 
   // ---- shared strings ----
+  // The shared-string table can hold hundreds of thousands of entries: only entries with a hit are parsed.
   for (const ssPath of pkg.partsByType('spreadsheetml.sharedStrings+xml')) {
-    const doc = pkg.xml(ssPath);
-    if (!doc) continue;
-    childEls(doc.documentElement, NS.s, 'si').forEach((si, i) => {
+    const xml = pkg.text(ssPath) ?? '';
+    let i = -1;
+    for (const m of xml.matchAll(SI_RE)) {
+      i++;
+      if (!findHits(decodeXml(m[0]), compiled).length) continue;
+      const frag = pkg.fragment(ssPath, m.index!, m.index! + m[0].length);
       const refs = ssRefs.get(i);
       const where = refs ? (refs.length > 1 ? `${refs[0]} 等 ${refs.length} 個儲存格` : refs[0]!) : '共用字串（未被儲存格使用）';
-      units.push(markDirtyOnWrite(pkg, ssPath, richTextUnit(si, { part: ssPath, key: `si${i}`, location: 'body', where, page: ssFirstSheet.get(i) })));
-    });
+      units.push(touchOnWrite(frag, richTextUnit(frag.el, { part: ssPath, key: `si${i}`, location: 'body', where, page: ssFirstSheet.get(i) })));
+    }
   }
 
   // ---- pivot caches: copies of source data strings ----
