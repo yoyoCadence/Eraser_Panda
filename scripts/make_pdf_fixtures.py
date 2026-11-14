@@ -136,6 +136,16 @@ def reportlab_pdf():
 
 
 
+def form_pdf():
+    """AcroForm: a text field and a dropdown whose values are labels, plus an unrelated field."""
+    c = canvas.Canvas(os.path.join(OUT, "form.pdf"), pagesize=A4)
+    c.drawString(72, 760, "Classification:")
+    c.acroForm.textfield(name="classification", tooltip="Confidential data classification", value="Confidential", x=180, y=752, width=200, height=20)
+    c.acroForm.choice(name="level", value="Internal Use Only", options=["Public", "Internal Use Only", "Secret"], x=180, y=720, width=200, height=20)
+    c.acroForm.textfield(name="owner", value="Finance team", x=180, y=690, width=200, height=20)
+    c.save()
+
+
 def encrypted_pdf():
     """Owner-password-only PDF (opens without a password, editing restricted) — common in corporate exports."""
     w = PdfWriter(clone_from=os.path.join(OUT, "incremental.pdf"))
@@ -148,6 +158,7 @@ if __name__ == "__main__":
     incremental_pdf()
     reportlab_pdf()
     encrypted_pdf()
-    for name in ("office.pdf", "incremental.pdf", "reportlab.pdf", "encrypted.pdf"):
+    form_pdf()
+    for name in ("office.pdf", "incremental.pdf", "reportlab.pdf", "encrypted.pdf", "form.pdf"):
         r = PdfReader(os.path.join(OUT, name))
         print(name, len(r.pages), "pages")

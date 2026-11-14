@@ -132,6 +132,29 @@ describe('PDF logos', () => {
   });
 });
 
+describe('PDF form fields (AcroForm)', () => {
+  it('cleans field values, tooltips and choice options; unrelated fields keep value and appearance', async () => {
+    const input = load('form.pdf');
+    const { findings } = await pdfHandler.scan(input, ctx);
+    const form = findings.filter((f) => f.location === 'formField');
+    expect(form.map((f) => f.where)).toEqual(expect.arrayContaining(['表單欄位「classification」', '表單欄位「classification」・提示文字', '表單欄位「level」', '表單欄位「level」・選項']));
+    expect(form.some((f) => f.where.includes('owner'))).toBe(false);
+    const out = await pdfHandler.apply(input, ctx, new Set(findings.map((f) => f.id)));
+    expect((await pdfHandler.scan(out, ctx)).findings.filter((f) => f.location === 'formField')).toEqual([]);
+    expect(rawScan('pdf', out, compiled)).toEqual([]);
+    const { PDFDocument, PDFName } = await import('pdf-lib');
+    const doc = await PDFDocument.load(out);
+    const af = doc.catalog.lookup(PDFName.of('AcroForm')) as import('pdf-lib').PDFDict;
+    expect(String(af.get(PDFName.of('NeedAppearances')))).toBe('true');
+    const byName = Object.fromEntries(doc.getForm().getFields().map((f) => [f.getName(), f]));
+    expect(byName['owner']!.acroField.dict.get(PDFName.of('AP'))).toBeDefined(); // untouched field keeps its appearance
+    expect(byName['classification']!.acroField.dict.get(PDFName.of('AP'))).toBeUndefined();
+    expect(latin1(out)).toMatch(/Finance team/);
+    const t = pypdfText(out, 'form_clean.pdf');
+    if (t !== undefined) expect(t).toMatch(/Classification:/);
+  });
+});
+
 describe('PDF incremental updates', () => {
   it('drops stale revisions that still contain the label, even when nothing is selected', async () => {
     const input = load('incremental.pdf');
