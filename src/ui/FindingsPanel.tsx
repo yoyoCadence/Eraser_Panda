@@ -1,8 +1,11 @@
-import { useMemo, useState } from 'preact/hooks';
-import type { Finding, LocationKind } from '../core/types';
+import { useEffect, useMemo, useState } from 'preact/hooks';
+import type { Finding, LocationKind, NormRect, Region, RegionStats } from '../core/types';
+import { rangeLabel, regionSummary, regionWarnings } from '../formats/pdf/regions';
 import type { DocState } from './engine';
-import { PdfPreview } from './PdfPreview';
+import { PdfPreview, type RegionState } from './PdfPreview';
 import { TextPreview } from './TextPreview';
+
+let regionSeq = 0;
 
 interface Group {
   key: string;
@@ -29,15 +32,25 @@ const FORMAT_LABEL = { docx: 'Word', xlsx: 'Excel', pptx: 'PowerPoint', pdf: 'PD
 interface Props {
   doc: DocState;
   onSelect: (ids: Set<string>) => void;
+  onRegions: (regions: Region[]) => void;
   onClean: () => void;
   onDownloadAgain: () => void;
 }
 
-export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props) {
+interface Pending {
+  page: number;
+  rect: NormRect;
+  from: number;
+  to: number;
+}
+
+export function FindingsPanel({ doc, onSelect, onRegions, onClean, onDownloadAgain }: Props) {
   const findings = doc.result?.findings ?? [];
   const [filter, setFilter] = useState('');
   const [focus, setFocus] = useState<{ id: string | null; tick: number }>({ id: null, tick: 0 });
-  const [view, setView] = useState<'original' | 'clean'>('original');
+  const [viewChoice, setView] = useState<'original' | 'clean'>('original');
+  // "cleaned" only exists once this document has an output (the panel is reused across documents)
+  const view = doc.output ? viewChoice : 'original';
   const locate = (id: string) => setFocus((f) => ({ id, tick: f.tick + 1 }));
   const isPdf = doc.format === 'pdf' && !!doc.bytes;
   const blocks = doc.result?.preview ?? [];
@@ -60,6 +73,46 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
   const busy = doc.status === 'cleaning';
   const selectedCount = removable.filter((f) => sel.has(f.id)).length;
 
+  // ---- user-drawn removal regions (PDF) ----
+  const pageCount = doc.result?.pageCount ?? 1;
+  const [drawing, setDrawing] = useState(false);
+  const [pending, setPending] = useState<Pending | null>(null);
+  useEffect(() => {
+    // switching documents ends any drawing in progress and starts on the original
+    setDrawing(false);
+    setPending(null);
+    setView('original');
+  }, [doc.key]);
+  useEffect(() => {
+    if (!drawing && !pending) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setDrawing(false);
+      setPending(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawing, pending]);
+  const regionIds = new Set(findings.filter((f) => f.kind === 'region').map((f) => f.id));
+  const regionState = (r: Region): RegionState => (!regionIds.has(`region:${r.id}`) ? 'empty' : sel.has(`region:${r.id}`) ? 'on' : 'off');
+  const clampPage = (n: number) => Math.min(pageCount, Math.max(1, Math.round(n) || 1));
+  const addPending = () => {
+    if (!pending) return;
+    const from = clampPage(Math.min(pending.from, pending.to));
+    const to = clampPage(Math.max(pending.from, pending.to));
+    onRegions([...doc.regions, { id: `r${++regionSeq}`, rect: pending.rect, from, to }]);
+    setPending(null);
+  };
+  const updateRegion = (id: string, p: Partial<Region>) =>
+    onRegions(
+      doc.regions.map((r) => {
+        if (r.id !== id) return r;
+        const next = { ...r, ...p };
+        return { ...next, from: clampPage(Math.min(next.from, next.to)), to: clampPage(Math.max(next.from, next.to)) };
+      }),
+    );
+  const showRegions = isPdf && view === 'original';
+
   return (
     <section class="panel" data-testid="findings-panel">
       <header class="panel-head">
@@ -78,17 +131,19 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
         ))}
       </header>
 
-      {findings.length === 0 ? (
-        <div class="empty-ok" data-testid="no-findings">
-          <span aria-hidden="true">✅</span>
-          <p>沒有找到任何標籤字眼或敏感度 metadata。</p>
-          <p class="muted">若預期應該有，請到「關鍵字設定」新增公司名稱或專案代號。</p>
-        </div>
+      {findings.length === 0 && !isPdf ? (
+        <NoFindings />
       ) : (
         <>
           <div class="actionbar">
-            <button type="button" class="primary" disabled={busy || selectedCount === 0} onClick={onClean} data-testid="clean-one">
-              {busy ? '處理中…' : `🧹 清除 ${selectedCount} 項並下載`}
+            <button type="button" class="primary" disabled={busy || !!doc.rescanning || selectedCount === 0} onClick={onClean} data-testid="clean-one">
+              {busy ? (
+                <>
+                  <span class="btn-spinner" aria-hidden="true" /> 清除中…
+                </>
+              ) : (
+                `🧹 清除 ${selectedCount} 項並下載`
+              )}
             </button>
             <button type="button" onClick={() => set(removable.map((f) => f.id), true)} disabled={busy}>
               全選
@@ -113,6 +168,36 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
 
           <div class={hasPreview ? 'split' : ''}>
           <div class="groups">
+            {findings.length === 0 && <NoFindings pdf />}
+            {isPdf && doc.regions.length > 0 && (
+              <details class="group" open data-group="region">
+                <summary>
+                  <span class="group-label">✂️ 手動框選區域</span>
+                  <span class="count">{doc.regions.length}</span>
+                  <span class="group-hint">框內的文字、圖片、向量圖形與註解會被真正刪除（不是蓋住）；可調整頁面範圍</span>
+                </summary>
+                <ul class="findings">
+                  {doc.regions.map((r, idx) => (
+                    <RegionRow
+                      key={r.id}
+                      index={idx + 1}
+                      region={r}
+                      pageCount={pageCount}
+                      stats={doc.result?.regionStats?.[r.id]}
+                      finding={regionIds.has(`region:${r.id}`)}
+                      checked={sel.has(`region:${r.id}`)}
+                      disabled={busy}
+                      updating={!!doc.rescanning}
+                      focused={focus.id === `region:${r.id}`}
+                      onToggle={(v) => set([`region:${r.id}`], v)}
+                      onRange={(from, to) => updateRegion(r.id, { from, to })}
+                      onLocate={() => (setView('original'), locate(`region:${r.id}`))}
+                      onDelete={() => onRegions(doc.regions.filter((x) => x.id !== r.id))}
+                    />
+                  ))}
+                </ul>
+              </details>
+            )}
             {GROUPS.map((g) => {
               const items = shown.filter(g.test);
               if (!items.length) return null;
@@ -156,7 +241,30 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
           {hasPreview && (
             <aside class="preview-col">
               <div class="preview-head">
-                <span class="muted">預覽</span>
+                <span class="muted">
+                  預覽
+                  {doc.rescanning && (
+                    <span class="updating" data-testid="rescanning">
+                      <span class="btn-spinner dark" aria-hidden="true" /> 更新框選區域…
+                    </span>
+                  )}
+                </span>
+                {isPdf && (
+                  <button
+                    type="button"
+                    class={`draw-toggle${drawing ? ' on' : ''}`}
+                    aria-pressed={drawing}
+                    disabled={busy}
+                    onClick={() => {
+                      setView('original');
+                      setPending(null);
+                      setDrawing((d) => !d);
+                    }}
+                    data-testid="draw-toggle"
+                  >
+                    {drawing ? '✕ 取消框選' : '✂️ 框選要移除的區域'}
+                  </button>
+                )}
                 {isPdf && doc.output && (
                   <div class="seg" role="tablist">
                     <button type="button" role="tab" aria-selected={view === 'original'} class={view === 'original' ? 'on' : ''} onClick={() => setView('original')}>
@@ -168,6 +276,43 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
                   </div>
                 )}
               </div>
+              {isPdf && drawing && !pending && <p class="draw-hint">在任一頁上<b>按住拖曳</b>，框出要移除的範圍（Esc 取消）</p>}
+              {isPdf && pending && (
+                <form
+                  class="pending-bar"
+                  data-testid="pending-bar"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    addPending();
+                  }}
+                >
+                  <span>
+                    套用到 第{' '}
+                    <input type="number" min={1} max={pageCount} value={pending.from} onInput={(e) => setPending({ ...pending, from: Number(e.currentTarget.value) })} aria-label="起始頁" data-testid="pending-from" /> 頁 到 第{' '}
+                    <input type="number" min={1} max={pageCount} value={pending.to} onInput={(e) => setPending({ ...pending, to: Number(e.currentTarget.value) })} aria-label="結束頁" data-testid="pending-to" /> 頁
+                    <span class="muted small">（共 {pageCount} 頁）</span>
+                  </span>
+                  <span class="pending-quick">
+                    <button type="button" onClick={() => setPending({ ...pending, from: pending.page, to: pending.page })}>
+                      只有第 {pending.page} 頁
+                    </button>
+                    <button type="button" onClick={() => setPending({ ...pending, from: pending.page, to: pageCount })}>
+                      到最後一頁
+                    </button>
+                    <button type="button" onClick={() => setPending({ ...pending, from: 1, to: pageCount })} data-testid="pending-all">
+                      全部頁面
+                    </button>
+                  </span>
+                  <span class="pending-actions">
+                    <button type="button" onClick={() => setPending(null)}>
+                      取消
+                    </button>
+                    <button type="submit" class="primary" data-testid="pending-add">
+                      ✂️ 加入區域
+                    </button>
+                  </span>
+                </form>
+              )}
               {isPdf ? (
               <PdfPreview
                 bytes={previewBytes!}
@@ -178,6 +323,14 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
                 onPick={(id) => {
                   locate(id);
                   document.querySelector(`[data-finding-id="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }}
+                regions={showRegions ? doc.regions : []}
+                regionState={regionState}
+                drawing={drawing && showRegions}
+                pending={showRegions ? pending : null}
+                onDrawn={(page, rect) => {
+                  setDrawing(false);
+                  setPending({ page, rect, from: page, to: page });
                 }}
               />
               ) : (
@@ -198,6 +351,80 @@ export function FindingsPanel({ doc, onSelect, onClean, onDownloadAgain }: Props
         </>
       )}
     </section>
+  );
+}
+
+function NoFindings({ pdf }: { pdf?: boolean }) {
+  return (
+    <div class={`empty-ok${pdf ? ' compact' : ''}`} data-testid="no-findings">
+      <span aria-hidden="true">✅</span>
+      <p>沒有找到任何標籤字眼或敏感度 metadata。</p>
+      <p class="muted">
+        若預期應該有，請到「關鍵字設定」新增公司名稱或專案代號
+        {pdf ? '；或在右側預覽按「✂️ 框選要移除的區域」，直接框出要刪除的位置。' : '。'}
+      </p>
+    </div>
+  );
+}
+
+interface RegionRowProps {
+  index: number;
+  region: Region;
+  pageCount: number;
+  stats?: RegionStats;
+  /** the region contains something removable (it has a finding) */
+  finding: boolean;
+  checked: boolean;
+  disabled: boolean;
+  updating: boolean;
+  focused: boolean;
+  onToggle: (v: boolean) => void;
+  onRange: (from: number, to: number) => void;
+  onLocate: () => void;
+  onDelete: () => void;
+}
+
+function RegionRow({ index, region, pageCount, stats, finding, checked, disabled, updating, focused, onToggle, onRange, onLocate, onDelete }: RegionRowProps) {
+  const warnings = stats ? regionWarnings(stats) : [];
+  return (
+    <li class={`finding region-row${finding && !checked ? ' kept' : ''}${focused ? ' focused' : ''}`} data-finding-id={`region:${region.id}`} data-testid="region-row">
+      <div class="region-line">
+        {finding ? (
+          <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onToggle(e.currentTarget.checked)} aria-label={`框選區域 ${index}`} />
+        ) : (
+          <span class="nocheck">ℹ️</span>
+        )}
+        <b>區域 {index}</b>
+        <span class="region-range">
+          第{' '}
+          <input type="number" min={1} max={pageCount} value={region.from} disabled={disabled} onChange={(e) => onRange(Number(e.currentTarget.value), region.to)} aria-label={`區域 ${index} 起始頁`} />
+          –
+          <input type="number" min={1} max={pageCount} value={region.to} disabled={disabled} onChange={(e) => onRange(region.from, Number(e.currentTarget.value))} aria-label={`區域 ${index} 結束頁`} /> 頁
+        </span>
+        <button type="button" class="locate" onClick={onLocate} title={`在預覽中顯示位置（${rangeLabel(region)}）`}>
+          📍 定位
+        </button>
+        <button type="button" class="icon-btn" onClick={onDelete} disabled={disabled} aria-label={`刪除區域 ${index}`} title="刪除這個區域">
+          🗑
+        </button>
+      </div>
+      <p class="note">
+        {updating || !stats ? (
+          <span class="muted">計算中…</span>
+        ) : (
+          <>
+            {finding && !checked && <span class="tag keep">例外・保留</span>}
+            {regionSummary(stats)}
+            {stats.sample && <span class="muted">（框內文字：{stats.sample.length > 30 ? `${stats.sample.slice(0, 30)}…` : stats.sample}）</span>}
+            {warnings.map((w) => (
+              <span class="region-warn" key={w}>
+                ⚠️ {w}
+              </span>
+            ))}
+          </>
+        )}
+      </p>
+    </li>
   );
 }
 

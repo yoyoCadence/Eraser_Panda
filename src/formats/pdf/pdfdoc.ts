@@ -146,3 +146,24 @@ export function normRect(doc: PDFDocument, pageIndex: number, r: [number, number
   const y = Math.min(ay, by);
   return { x, y, w: Math.abs(bx - ax), h: Math.abs(by - ay) };
 }
+
+/** Inverse of `normRect`: a rectangle normalised to the displayed page → PDF user space [x1, y1, x2, y2]. */
+export function denormRect(doc: PDFDocument, pageIndex: number, r: { x: number; y: number; w: number; h: number }): [number, number, number, number] {
+  const b = pageBox(doc, pageIndex);
+  const rot = (((doc.getPage(pageIndex).getRotation().angle ?? 0) % 360) + 360) % 360;
+  const unmap = (nx: number, ny: number): [number, number] => {
+    switch (rot) {
+      case 90:
+        return [b.x + ny * b.w, b.y + nx * b.h];
+      case 180:
+        return [b.x + b.w - nx * b.w, b.y + ny * b.h];
+      case 270:
+        return [b.x + b.w - ny * b.w, b.y + b.h - nx * b.h];
+      default:
+        return [b.x + nx * b.w, b.y + b.h - ny * b.h];
+    }
+  };
+  const [ax, ay] = unmap(r.x, r.y);
+  const [bx, by] = unmap(r.x + r.w, r.y + r.h);
+  return [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)];
+}

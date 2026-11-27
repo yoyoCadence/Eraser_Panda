@@ -1,9 +1,10 @@
-import { PDFArray, PDFDict, PDFName, PDFNumber, PDFRawStream, PDFRef, type PDFDocument, type PDFObject } from 'pdf-lib';
+import { PDFArray, PDFDict, PDFName, PDFNumber, PDFRawStream, PDFRef, PDFStream, type PDFDocument, type PDFObject } from 'pdf-lib';
 import type { Candidate } from '../../core/candidates';
 import { dataUrl, logoHash, pngEncode, sameLogo, thumbnail, type Pixels } from '../../core/image';
+import { pagesLabel } from '../../core/pages';
 import type { NormRect, ScanContext } from '../../core/types';
-import type { ImagePlacement } from './content/interpret';
-import type { PdfTextScan } from './content/textScan';
+import { apply, placementsOf, type ImagePlacement, type Placement } from './content/interpret';
+import { quadsRect, type PdfTextScan } from './content/textScan';
 import { lookupDict, nameOf, normRect, streamBytes } from './pdfdoc';
 
 const num = (o: PDFObject | undefined) => (o instanceof PDFNumber ? o.asNumber() : undefined);
@@ -154,6 +155,49 @@ function quadRect(doc: PDFDocument, p: ImagePlacement): NormRect {
   return normRect(doc, p.page - 1, [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
 }
 
+const fnv = (b: Uint8Array) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < b.length; i++) h = Math.imul(h ^ b[i]!, 0x01000193);
+  return `${b.length}:${(h >>> 0).toString(16)}`;
+};
+
+/** Dictionary keys that do not change what an image looks like (copies of one logo often differ only in these). */
+const NON_VISUAL = new Set(['Length', 'Name', 'Metadata', 'StructParent', 'StructParents', 'ID']);
+
+/**
+ * Fingerprint of everything that determines how an image renders: its bytes AND its dictionary — size, colour
+ * space (ICC profiles by content), /Decode, /SMask and /Mask (by content), filters … Referenced objects are compared
+ * by content, not by object number, so the same logo embedded once per page still matches itself, while images that
+ * share pixel bytes but differ in mask / colours / decode stay apart.
+ */
+export function imageFingerprint(doc: PDFDocument, obj: PDFObject | undefined, depth = 0): string {
+  if (obj === undefined) return '';
+  if (depth > 8) return '…';
+  if (obj instanceof PDFRef) return imageFingerprint(doc, doc.context.lookup(obj), depth + 1);
+  if (obj instanceof PDFRawStream) return `S(${fnv(obj.contents)}|${imageFingerprint(doc, obj.dict, depth + 1)})`;
+  if (obj instanceof PDFStream) return `S(${fnv(obj.getContents())}|${imageFingerprint(doc, obj.dict, depth + 1)})`;
+  if (obj instanceof PDFDict)
+    return `{${obj
+      .entries()
+      .filter(([k]) => !NON_VISUAL.has(k.decodeText()))
+      .map(([k, v]) => `${k.decodeText()}:${imageFingerprint(doc, v, depth + 1)}`)
+      .sort()
+      .join(',')}}`;
+  if (obj instanceof PDFArray) return `[${obj.asArray().map((v) => imageFingerprint(doc, v, depth + 1)).join(',')}]`;
+  return obj.toString();
+}
+
+/** Every real (page, rect) occurrence of an image placement — a placement inside a shared form appears on many pages. */
+function occurrences(doc: PDFDocument, scan: PdfTextScan, p: ImagePlacement, memo: Map<string, Placement[]>): Array<{ page: number; rect: NormRect }> {
+  const out: Array<{ page: number; rect: NormRect }> = [];
+  for (const pl of placementsOf(scan.result, p.src, memo)) {
+    const t = pl.t;
+    const rect = t ? quadsRect(doc, pl.page, [p.quad.map(([x, y]) => apply(t, x, y))]) : undefined;
+    if (rect) out.push({ page: pl.page, rect });
+  }
+  return out;
+}
+
 /**
  * Logo candidates among placed images:
  *   - the same image on 2+ pages (or in a form drawn on 2+ pages)        → high
@@ -161,21 +205,38 @@ function quadRect(doc: PDFDocument, p: ImagePlacement): NormRect {
  *   - small image in the header / footer band                              → medium
  *   - small image near the top of page 1 (cover logo)                      → low, not pre-selected
  * Full-page images (scans, backgrounds) and specks are ignored.
+ * "The same image" is the same XObject OR an identical-looking copy (`imageFingerprint`) — generators often embed the
+ * logo once per page.
  */
 export async function scanPdfImages(doc: PDFDocument, scan: PdfTextScan, ctx: ScanContext): Promise<Candidate[]> {
-  const groups = new Map<string, ImagePlacement[]>();
+  const byRef = new Map<string, ImagePlacement[]>();
   for (const p of scan.result.images) {
     const key = p.ref ? `img${p.ref.objectNumber}_${p.ref.generationNumber}` : `inline:${p.src.key}:${p.instr}`;
-    groups.set(key, [...(groups.get(key) ?? []), p]);
+    byRef.set(key, [...(byRef.get(key) ?? []), p]);
   }
+  // merge XObjects with identical bytes (first in document order names the group, so ids stay stable)
+  const groups = new Map<string, ImagePlacement[]>();
+  const byContent = new Map<string, string>();
+  for (const [key, placements] of byRef) {
+    const first = placements[0]!;
+    const rect = quadRect(doc, first);
+    const stream = first.ref ? doc.context.lookup(first.ref) : undefined;
+    const area = rect.w * rect.h;
+    const ck = stream instanceof PDFRawStream && area <= 0.5 && area >= 0.0004 ? imageFingerprint(doc, stream) : undefined;
+    const target = ck ? byContent.get(ck) : undefined;
+    if (target) groups.get(target)!.push(...placements);
+    else {
+      groups.set(key, [...placements]);
+      if (ck) byContent.set(ck, key);
+    }
+  }
+  const memo = new Map<string, Placement[]>();
   const out: Candidate[] = [];
   for (const [key, placements] of groups) {
     const first = placements[0]!;
-    const pages = new Set<number>();
-    for (const p of placements) {
-      const uses = p.src.kind === 'form' ? scan.result.formUses.get(p.src.key) : undefined;
-      for (const pg of uses ?? [p.page]) pages.add(pg);
-    }
+    const occ = placements.flatMap((p) => occurrences(doc, scan, p, memo));
+    const pages = new Set<number>(occ.map((o) => o.page));
+    for (const p of placements) for (const pg of placementsOf(scan.result, p.src, memo).map((x) => x.page)) pages.add(pg);
     const rect = quadRect(doc, first);
     const area = rect.w * rect.h;
     if (area > 0.5 || area < 0.0004) continue;
@@ -189,8 +250,13 @@ export async function scanPdfImages(doc: PDFDocument, scan: PdfTextScan, ctx: Sc
     if (!repeated && !sample && !band && !cover) continue;
 
     const confidence = repeated || sample ? 'high' : band ? 'medium' : 'low';
-    const where = `第 ${first.page} 頁・${band === 'header' ? '頁首' : band === 'footer' ? '頁尾' : cover ? '封面' : '頁面'}圖片${pages.size > 1 ? `（共 ${pages.size} 頁）` : ''}`;
+    const firstPage = Math.min(...pages);
+    const where = `${pages.size > 1 ? pagesLabel(pages) : `第 ${firstPage} 頁`}・${band === 'header' ? '頁首' : band === 'footer' ? '頁尾' : cover ? '封面' : '頁面'}圖片`;
     const reasons = [sample ? '與你上傳的 Logo 樣本相符' : '', repeated ? `在 ${pages.size} 頁重複出現` : '', band ? `位於${band === 'header' ? '頁首' : '頁尾'}` : '', cover ? '位於封面頂部，可能是 Logo，請確認' : ''].filter(Boolean);
+    const byPage = new Map<number, NormRect[]>();
+    for (const o of occ) byPage.set(o.page, [...(byPage.get(o.page) ?? []), o.rect]);
+    const highlights = [...byPage].sort((a, b) => a[0] - b[0]).map(([page, rects]) => ({ page, rects }));
+    const refs = [...new Map(placements.filter((p) => p.ref).map((p) => [p.ref!.toString(), p.ref!])).values()];
     out.push({
       finding: {
         id: `${key}#logo`,
@@ -199,13 +265,14 @@ export async function scanPdfImages(doc: PDFDocument, scan: PdfTextScan, ctx: Sc
         matchText: sample ? 'Logo（符合樣本）' : '可能是 Logo 的圖片',
         context: { before: '', match: sample ? 'Logo（符合樣本）' : '可能是 Logo 的圖片', after: '' },
         where,
-        page: first.page,
-        rects: placements.filter((p) => p.page === first.page).map((p) => quadRect(doc, p)),
+        page: firstPage,
+        rects: highlights.find((h) => h.page === firstPage)?.rects ?? [rect],
+        highlights,
         thumbnail: info.thumb,
         confidence,
         removable: true,
         defaultSelected: confidence !== 'low',
-        note: `${reasons.join('、')}；${pages.size > 1 ? `將從全部 ${pages.size} 頁移除` : '圖片將被移除'}`,
+        note: `${reasons.join('、')}；${pages.size > 1 ? `將從全部 ${pages.size} 頁（${pagesLabel(pages, 12)}）移除` : '圖片將被移除'}`,
       },
       remove: () => {
         for (const p of placements) {
@@ -213,11 +280,24 @@ export async function scanPdfImages(doc: PDFDocument, scan: PdfTextScan, ctx: Sc
           set.add(p.instr);
           scan.deletes.set(p.src.key, set);
         }
-        if (first.ref) scan.dropXObjects.push(first.ref);
+        scan.dropXObjects.push(...refs);
       },
     });
   }
   return out;
+}
+
+/** Image XObjects every interpreted placement of which is being deleted (by logo findings or regions). */
+export function fullyDeletedImages(scan: PdfTextScan): PDFRef[] {
+  const status = new Map<string, { ref: PDFRef; all: boolean }>();
+  for (const p of scan.result.images) {
+    if (!p.ref) continue;
+    const k = p.ref.toString();
+    const deleted = !!scan.deletes.get(p.src.key)?.has(p.instr);
+    const cur = status.get(k);
+    status.set(k, { ref: p.ref, all: (cur ? cur.all : true) && deleted });
+  }
+  return [...status.values()].filter((s) => s.all).map((s) => s.ref);
 }
 
 /** Remove resource entries that point at removed images so garbage collection can drop the image data itself. */

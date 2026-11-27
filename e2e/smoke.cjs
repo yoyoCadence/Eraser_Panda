@@ -15,6 +15,20 @@ if (!fs.existsSync(html)) {
   process.exit(1);
 }
 
+/** Decoded content stream text of every page (pdf-lib, Flate). */
+async function PDFDocumentLoadPages(bytes) {
+  const { PDFDocument, PDFName, PDFArray, PDFRawStream, decodePDFRawStream } = require('pdf-lib');
+  const doc = await PDFDocument.load(bytes);
+  return doc.getPages().map((p) => {
+    const c = p.node.get(PDFName.of('Contents'));
+    const refs = c instanceof PDFArray ? c.asArray() : [c];
+    return refs
+      .map((r) => doc.context.lookup(r))
+      .map((s) => (s instanceof PDFRawStream ? Buffer.from(s.dict.get(PDFName.of('Filter')) ? decodePDFRawStream(s).decode() : s.contents).toString('latin1') : ''))
+      .join('\n');
+  });
+}
+
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
 
@@ -146,6 +160,73 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
   await page.getByTestId('view-clean').click();
   await page.locator('[data-testid=pdf-preview] canvas').first().waitFor({ timeout: 15000 });
   check('cleaned PDF previews', true);
+
+  // ---- PDF regions: logo highlighted on every page; draw a box, apply it to pages 2–4, clean with a progress overlay ----
+  const regionPdf = await (async () => {
+    const { PDFDocument, PDFName } = require('pdf-lib');
+    const doc = await PDFDocument.create();
+    const c = doc.context;
+    const font = c.register(c.obj({ Type: 'Font', Subtype: 'Type1', BaseFont: 'Helvetica', Encoding: 'WinAnsiEncoding' }));
+    const px = [];
+    for (let i = 0; i < 32 * 16; i++) px.push(((i % 32 >> 2) + (i >> 7)) % 2 ? 40 : 220);
+    const img = c.register(c.flateStream(new Uint8Array(px), { Type: 'XObject', Subtype: 'Image', Width: 32, Height: 16, ColorSpace: 'DeviceGray', BitsPerComponent: 8 }));
+    for (let p = 1; p <= 4; p++) {
+      const page = doc.addPage([842, 595]);
+      const content = [
+        'q 90 0 0 40 30 530 cm /Logo Do Q',
+        'q 0.1 0.3 0.7 rg 700 540 110 30 re f Q',
+        'q BT /F1 9 Tf 1 1 1 rg 740 550 Td (ACME) Tj ET Q',
+        `BT /F1 12 Tf 60 300 Td (Body line ${p}) Tj ET`,
+      ].join('\n');
+      page.node.set(PDFName.of('Contents'), c.register(c.stream(content)));
+      page.node.set(PDFName.of('Resources'), c.obj({ Font: { F1: font }, XObject: { Logo: img } }));
+    }
+    return Buffer.from(await doc.save({ useObjectStreams: false }));
+  })();
+  await page.getByTestId('file-input').setInputFiles([{ name: 'sheet.pdf', mimeType: 'application/pdf', buffer: regionPdf }]);
+  await page.locator('.filelist li', { hasText: 'sheet.pdf' }).locator('.file-btn').click();
+  await page.getByTestId('findings-panel').waitFor();
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid=pdf-preview] .pdf-page').length === 4);
+  const logoPerPage = await page.$$eval('[data-testid=pdf-preview] .pdf-page', (ps) => ps.map((p) => p.querySelectorAll('.hl').length));
+  check('shared logo is highlighted on every page', logoPerPage.every((n) => n >= 1), logoPerPage.join(','));
+  check('logo row names every page', (await page.locator('[data-group="logo"] li').first().innerText()).includes('第 1–4 頁'));
+
+  await page.getByTestId('draw-toggle').click();
+  const p2 = page.locator('.pdf-page[data-page="2"]');
+  await p2.scrollIntoViewIfNeeded();
+  const bb = await p2.boundingBox();
+  // the blue box (x 700–810, y 540–570 of 842×595) → normalised x .83–.96, y .04–.09
+  await page.mouse.move(bb.x + bb.width * 0.82, bb.y + bb.height * 0.03);
+  await page.mouse.down();
+  await page.mouse.move(bb.x + bb.width * 0.9, bb.y + bb.height * 0.07, { steps: 5 });
+  await page.mouse.move(bb.x + bb.width * 0.975, bb.y + bb.height * 0.105, { steps: 5 });
+  await page.mouse.up();
+  await page.getByTestId('pending-bar').waitFor();
+  check('drawing defaults the range to the page drawn on', (await page.getByTestId('pending-from').inputValue()) === '2' && (await page.getByTestId('pending-to').inputValue()) === '2');
+  await page.getByTestId('pending-to').fill('4');
+  check('pending region previewed on pages 2–4', (await page.getByTestId('pending-region').count()) === 3);
+  await page.getByTestId('pending-add').click();
+  await page.getByTestId('region-row').waitFor();
+  await page.waitForSelector('[data-testid=rescanning]', { state: 'detached' });
+  const regionText = await page.getByTestId('region-row').innerText();
+  check('region lists what it removes', regionText.includes('12 個字') && regionText.includes('3 個向量圖形') && regionText.includes('ACME'), regionText);
+  check('region drawn on pages 2–4 only', (await page.locator('.region-box[data-region]').count()) === 3);
+  if (shots) await page.screenshot({ path: path.join(shots, '7-region.png') });
+
+  const overlaySeen = page.waitForSelector('[data-testid=busy-overlay]', { state: 'attached', timeout: 10000 }).then(
+    () => true,
+    () => false,
+  );
+  const regionDl = page.waitForEvent('download');
+  await page.getByTestId('clean-one').click();
+  if (await page.getByTestId('confirm-dialog').isVisible()) await page.getByTestId('confirm-ok').click();
+  const regionOut = await PDFDocumentLoadPages(fs.readFileSync(await (await regionDl).path()));
+  check('progress overlay shown while cleaning', await overlaySeen);
+  await page.getByTestId('clean-result').waitFor();
+  check('progress overlay closes when done', (await page.getByTestId('busy-overlay').count()) === 0);
+  check('page 1 keeps the box (outside the range)', regionOut[0].includes('700 540 110 30 re') && regionOut[0].includes('(ACME)'));
+  check('pages 2–4: box and its text removed', regionOut.slice(1).every((t) => !t.includes('700 540 110 30 re') && !t.includes('ACME') && !t.includes('41434d45')));
+  check('pages 2–4: body text kept', regionOut.every((t, i) => t.includes(`(Body line ${i + 1})`)));
 
   // ---- mobile layout has no horizontal scroll ----
   await page.setViewportSize({ width: 390, height: 800 });

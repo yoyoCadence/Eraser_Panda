@@ -3,10 +3,11 @@ import type { Candidate, TextUnit } from '../../../core/candidates';
 import { unitCandidates } from '../../../core/candidates';
 import type { CompiledRules } from '../../../core/matcher';
 import type { Segment } from '../../../core/segments';
-import type { LocationKind, NormRect } from '../../../core/types';
+import { pagesLabel } from '../../../core/pages';
+import type { Finding, LocationKind, NormRect } from '../../../core/types';
 import { normRect } from '../pdfdoc';
 import type { Glyph } from './fonts';
-import { interpretPage, newResult, type InterpretResult, type McKind, type Source, type TextRun } from './interpret';
+import { apply, interpretPage, newResult, placementPages, placementsOf, type InterpretResult, type Matrix, type McKind, type Placement, type Source, type TextRun } from './interpret';
 import { fmtNum, hexString, latin1, type Instr } from './lexer';
 
 /** Removal plan: source key → instruction index → TJ element index → removed glyph indices. */
@@ -31,8 +32,8 @@ export interface PdfTextScan {
   undecodable: number;
 }
 
-export function interpretAll(doc: PDFDocument): InterpretResult {
-  const res = newResult();
+export function interpretAll(doc: PDFDocument, trackPaths = false): InterpretResult {
+  const res = newResult(trackPaths);
   for (let i = 0; i < doc.getPageCount(); i++) interpretPage(doc, i, res);
   return res;
 }
@@ -112,11 +113,25 @@ function classify(line: Line, rect: NormRect | undefined, formPages: number): { 
     if (rect.y + rect.h < 0.1) return { location: 'header', label: '頁首' };
     if (rect.y > 0.9) return { location: 'footer', label: '頁尾' };
   }
-  if (formPages > 1) return { location: 'header', label: `重複內容（${formPages} 頁）` };
+  if (formPages > 1) return { location: 'header', label: '重複內容' };
   return { location: 'body', label: '' };
 }
 
-function quadsRect(doc: PDFDocument, page: number, quads: Array<Array<[number, number]>>): NormRect | undefined {
+type Quad = Array<[number, number]>;
+
+/** Highlights of interpreted quads on every placement of their source (shared forms appear on many pages). */
+export function spreadHighlights(doc: PDFDocument, placements: readonly Placement[], quads: Quad[]): Finding['highlights'] {
+  const byPage = new Map<number, NormRect[]>();
+  for (const pl of placements) {
+    if (!pl.t) continue;
+    const t: Matrix = pl.t;
+    const r = quadsRect(doc, pl.page, quads.map((q) => q.map(([x, y]) => apply(t, x, y))));
+    if (r) byPage.set(pl.page, [...(byPage.get(pl.page) ?? []), r]);
+  }
+  return [...byPage].sort((a, b) => a[0] - b[0]).map(([page, rects]) => ({ page, rects }));
+}
+
+export function quadsRect(doc: PDFDocument, page: number, quads: Array<Array<[number, number]>>): NormRect | undefined {
   if (!quads.length) return undefined;
   let x1 = Infinity;
   let y1 = Infinity;
@@ -132,14 +147,15 @@ function quadsRect(doc: PDFDocument, page: number, quads: Array<Array<[number, n
   return normRect(doc, page - 1, [x1, y1, x2, y2]);
 }
 
-export function scanPageText(doc: PDFDocument, compiled: CompiledRules): PdfTextScan {
-  const result = interpretAll(doc);
+export function scanPageText(doc: PDFDocument, compiled: CompiledRules, trackPaths = false): PdfTextScan {
+  const result = interpretAll(doc, trackPaths);
   const lines = buildLines(result);
   const units: TextUnit[] = [];
   const plan: RemovalPlan = new Map();
   let undecodable = 0;
   const lineIndex = new Map<Source, number>();
-  const meta = new Map<TextUnit, { line: Line; segRun: Array<number | null>; glyphStarts: number[][] }>();
+  const meta = new Map<TextUnit, { line: Line; segRun: Array<number | null>; glyphStarts: number[][]; placements: Placement[] }>();
+  const memo = new Map<string, Placement[]>();
 
   for (const line of lines) {
     const { segments, segRun, glyphStarts } = lineText(line);
@@ -151,13 +167,15 @@ export function scanPageText(doc: PDFDocument, compiled: CompiledRules): PdfText
     const page = line.src.page;
     const allQuads = line.runs.flatMap((r) => r.quads);
     const lineRect = quadsRect(doc, page, allQuads);
-    const formPages = line.src.kind === 'form' ? (result.formUses.get(line.src.key)?.size ?? 1) : 1;
+    const placements = placementsOf(result, line.src, memo);
+    const pages = placementPages(placements);
+    const formPages = line.src.kind === 'form' ? pages.length : 1;
     const cls = classify(line, lineRect, formPages);
     const unit: TextUnit = {
       part: line.src.key,
       key: `L${n}`,
       location: cls.location,
-      where: `第 ${page} 頁${cls.label ? `・${cls.label}` : ''}${line.src.kind === 'form' && formPages > 1 && !cls.label.includes('頁）') ? `（共 ${formPages} 頁）` : ''}`,
+      where: `${formPages > 1 ? pagesLabel(pages) : `第 ${page} 頁`}${cls.label ? `・${cls.label}` : ''}`,
       page,
       kind: cls.location === 'watermark' ? 'watermark' : 'text',
       segments,
@@ -169,7 +187,7 @@ export function scanPageText(doc: PDFDocument, compiled: CompiledRules): PdfText
           : undefined,
     };
     units.push(unit);
-    meta.set(unit, { line, segRun, glyphStarts });
+    meta.set(unit, { line, segRun, glyphStarts, placements });
   }
 
   const candidates = unitCandidates(units, compiled);
@@ -198,6 +216,7 @@ export function scanPageText(doc: PDFDocument, compiled: CompiledRules): PdfText
     }
     const rect = quadsRect(doc, c.cut.unit.page!, quads);
     if (rect) c.finding.rects = [rect];
+    if (m.placements.length > 1 || m.placements[0]?.page !== c.cut.unit.page) c.finding.highlights = spreadHighlights(doc, m.placements, quads);
     // replace the generic text cut with a glyph-removal plan (content streams are rewritten as a whole later)
     c.cut = undefined;
     c.remove = () => {
@@ -207,7 +226,7 @@ export function scanPageText(doc: PDFDocument, compiled: CompiledRules): PdfText
   return { result, units, candidates, plan, deletes: new Map(), dropXObjects: [], undecodable };
 }
 
-function addRemoval(plan: RemovalPlan, run: TextRun, glyph: number): void {
+export function addRemoval(plan: RemovalPlan, run: TextRun, glyph: number): void {
   let bySrc = plan.get(run.src.key);
   if (!bySrc) plan.set(run.src.key, (bySrc = new Map()));
   let byInstr = bySrc.get(run.instr);

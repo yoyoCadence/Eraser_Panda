@@ -2,9 +2,10 @@ import { applyCandidates, unitCandidates, type Candidate } from '../../core/cand
 import { compileRules } from '../../core/matcher';
 import type { FormatHandler, ScanContext, ScanResult } from '../../core/types';
 import { applyPlan, scanPageText } from './content/textScan';
-import { dropImageResources, scanPdfImages } from './images';
+import { dropImageResources, fullyDeletedImages, scanPdfImages } from './images';
 import { scanPdfMetadata } from './metadata';
 import { loadPdf, normRect, savePdf } from './pdfdoc';
+import { scanRegions } from './regions';
 import { scanAnnotations, scanAttachments, scanFormFields, scanOutlines, scanStructTree } from './structure';
 
 async function collect(bytes: Uint8Array, ctx: ScanContext) {
@@ -14,9 +15,10 @@ async function collect(bytes: Uint8Array, ctx: ScanContext) {
   const form = scanFormFields(doc);
   const units = [...meta.units, ...scanOutlines(doc), ...form.units, ...scanStructTree(doc)];
   const attachments = scanAttachments(doc);
-  const text = scanPageText(doc, compiled);
+  const text = scanPageText(doc, compiled, !!ctx.regions?.length);
   const images = await scanPdfImages(doc, text, ctx);
-  const candidates: Candidate[] = [...text.candidates, ...images, ...unitCandidates(units, compiled), ...meta.candidates, ...scanAnnotations(doc, compiled), ...attachments.candidates];
+  const regions = scanRegions(doc, text, ctx.regions ?? []);
+  const candidates: Candidate[] = [...regions.candidates, ...text.candidates, ...images, ...unitCandidates(units, compiled), ...meta.candidates, ...scanAnnotations(doc, compiled), ...attachments.candidates];
   const warnings: string[] = [...form.warnings];
   if (text.undecodable > 0) warnings.push(`有 ${text.undecodable} 個字元因字型缺少字元對照表（ToUnicode）而無法辨識，這些文字無法被偵測。`);
   if (!text.result.runs.length && doc.getPageCount() > 0) warnings.push('頁面上沒有可辨識的文字（可能是掃描影像或文字已轉為外框），只能處理 metadata 與註解。');
@@ -29,7 +31,8 @@ async function collect(bytes: Uint8Array, ctx: ScanContext) {
     doc,
     candidates,
     warnings,
-    finalize: [attachments.finalize, form.finalize, () => applyPlan(doc, text), () => dropImageResources(doc, text.dropXObjects)],
+    regionStats: regions.stats,
+    finalize: [attachments.finalize, form.finalize, () => applyPlan(doc, text), () => dropImageResources(doc, [...text.dropXObjects, ...fullyDeletedImages(text)])],
   };
 }
 
@@ -49,8 +52,8 @@ function scannedPagesOf(doc: import('pdf-lib').PDFDocument, res: import('./conte
 export const pdfHandler: FormatHandler = {
   id: 'pdf',
   async scan(bytes, ctx): Promise<ScanResult> {
-    const { doc, candidates, warnings } = await collect(bytes, ctx);
-    return { format: 'pdf', findings: candidates.map((c) => c.finding), warnings, pageCount: doc.getPageCount() };
+    const { doc, candidates, warnings, regionStats } = await collect(bytes, ctx);
+    return { format: 'pdf', findings: candidates.map((c) => c.finding), warnings, pageCount: doc.getPageCount(), regionStats };
   },
   async apply(bytes, ctx, removeIds) {
     const { doc, candidates, finalize } = await collect(bytes, ctx);

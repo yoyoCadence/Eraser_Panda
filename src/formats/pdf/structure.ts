@@ -78,7 +78,7 @@ export function scanAnnotations(doc: PDFDocument, compiled: CompiledRules): Cand
   return out;
 }
 
-function removeAnnot(doc: PDFDocument, annots: PDFArray | undefined, ref: PDFObject, annot: PDFDict): void {
+export function removeAnnot(doc: PDFDocument, annots: PDFArray | undefined, ref: PDFObject, annot: PDFDict): void {
   if (!annots) return;
   const popup = annot.get(PDFName.of('Popup'));
   for (let i = annots.size() - 1; i >= 0; i--) {

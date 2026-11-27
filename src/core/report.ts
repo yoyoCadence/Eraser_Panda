@@ -29,7 +29,7 @@ export async function sha256(bytes: Uint8Array): Promise<string | undefined> {
   }
 }
 
-const KIND: Record<string, string> = { text: '文字', metadata: 'Metadata', image: '圖片 / Logo', watermark: '浮水印', annotation: '註解' };
+const KIND: Record<string, string> = { text: '文字', metadata: 'Metadata', image: '圖片 / Logo', watermark: '浮水印', annotation: '註解', region: '框選區域' };
 
 /**
  * Audit report. Deliberately contains only the removed label text and its location — never the surrounding document
