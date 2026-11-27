@@ -100,7 +100,12 @@ export function App() {
       if (!doc?.bytes || !doc.format) return;
       const next = { ...doc, regions };
       patch(key, { regions, rescanning: true, output: undefined, status: 'ready' });
-      void scanBytes(key, doc.bytes, doc.format, docContext(ctxRef.current, next), patch, { result: doc.result, selected: doc.selected }, nextGen(key));
+      // the user may tick / untick findings while this runs: merge against the selection as it is when it finishes
+      const latest = () => {
+        const d = docsRef.current.find((x) => x.key === key);
+        return d && { result: d.result, selected: d.selected };
+      };
+      void scanBytes(key, doc.bytes, doc.format, docContext(ctxRef.current, next), patch, latest, nextGen(key));
     },
     [patch],
   );
@@ -128,6 +133,8 @@ export function App() {
   );
 
   const cleanAll = useCallback(async () => {
+    // a pending region re-scan means the findings on screen are stale (the new region is not in them yet)
+    if (docsRef.current.some((d) => d.rescanning)) return;
     const targets = docsRef.current.filter((d) => (d.status === 'ready' || d.status === 'done') && d.result);
     const outputs = [];
     try {
@@ -222,8 +229,8 @@ export function App() {
               ))}
             </ul>
             {cleanable.length > 1 && (
-              <button type="button" class="primary block" onClick={() => guarded(cleanAll)} data-testid="clean-all">
-                🧹 全部清除並下載 ZIP（{cleanable.length} 個檔案）
+              <button type="button" class="primary block" onClick={() => guarded(cleanAll)} disabled={!!busy || docs.some((d) => d.rescanning)} data-testid="clean-all">
+                {docs.some((d) => d.rescanning) ? '更新框選區域中…' : `🧹 全部清除並下載 ZIP（${cleanable.length} 個檔案）`}
               </button>
             )}
             {reports.length > 0 && (

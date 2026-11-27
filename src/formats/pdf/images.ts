@@ -1,4 +1,4 @@
-import { PDFArray, PDFDict, PDFName, PDFNumber, PDFRawStream, PDFRef, type PDFDocument, type PDFObject } from 'pdf-lib';
+import { PDFArray, PDFDict, PDFName, PDFNumber, PDFRawStream, PDFRef, PDFStream, type PDFDocument, type PDFObject } from 'pdf-lib';
 import type { Candidate } from '../../core/candidates';
 import { dataUrl, logoHash, pngEncode, sameLogo, thumbnail, type Pixels } from '../../core/image';
 import { pagesLabel } from '../../core/pages';
@@ -155,14 +155,36 @@ function quadRect(doc: PDFDocument, p: ImagePlacement): NormRect {
   return normRect(doc, p.page - 1, [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
 }
 
-/** FNV-1a over the image bytes + its dictionary's size keys: the same logo embedded once per page groups as one. */
-function contentKey(stream: PDFRawStream): string {
-  const b = stream.contents;
+const fnv = (b: Uint8Array) => {
   let h = 0x811c9dc5;
   for (let i = 0; i < b.length; i++) h = Math.imul(h ^ b[i]!, 0x01000193);
-  const w = num(stream.dict.lookup(PDFName.of('Width')));
-  const ht = num(stream.dict.lookup(PDFName.of('Height')));
-  return `${b.length}:${w}x${ht}:${(h >>> 0).toString(16)}`;
+  return `${b.length}:${(h >>> 0).toString(16)}`;
+};
+
+/** Dictionary keys that do not change what an image looks like (copies of one logo often differ only in these). */
+const NON_VISUAL = new Set(['Length', 'Name', 'Metadata', 'StructParent', 'StructParents', 'ID']);
+
+/**
+ * Fingerprint of everything that determines how an image renders: its bytes AND its dictionary — size, colour
+ * space (ICC profiles by content), /Decode, /SMask and /Mask (by content), filters … Referenced objects are compared
+ * by content, not by object number, so the same logo embedded once per page still matches itself, while images that
+ * share pixel bytes but differ in mask / colours / decode stay apart.
+ */
+export function imageFingerprint(doc: PDFDocument, obj: PDFObject | undefined, depth = 0): string {
+  if (obj === undefined) return '';
+  if (depth > 8) return '…';
+  if (obj instanceof PDFRef) return imageFingerprint(doc, doc.context.lookup(obj), depth + 1);
+  if (obj instanceof PDFRawStream) return `S(${fnv(obj.contents)}|${imageFingerprint(doc, obj.dict, depth + 1)})`;
+  if (obj instanceof PDFStream) return `S(${fnv(obj.getContents())}|${imageFingerprint(doc, obj.dict, depth + 1)})`;
+  if (obj instanceof PDFDict)
+    return `{${obj
+      .entries()
+      .filter(([k]) => !NON_VISUAL.has(k.decodeText()))
+      .map(([k, v]) => `${k.decodeText()}:${imageFingerprint(doc, v, depth + 1)}`)
+      .sort()
+      .join(',')}}`;
+  if (obj instanceof PDFArray) return `[${obj.asArray().map((v) => imageFingerprint(doc, v, depth + 1)).join(',')}]`;
+  return obj.toString();
 }
 
 /** Every real (page, rect) occurrence of an image placement — a placement inside a shared form appears on many pages. */
@@ -183,7 +205,8 @@ function occurrences(doc: PDFDocument, scan: PdfTextScan, p: ImagePlacement, mem
  *   - small image in the header / footer band                              → medium
  *   - small image near the top of page 1 (cover logo)                      → low, not pre-selected
  * Full-page images (scans, backgrounds) and specks are ignored.
- * "The same image" is the same XObject OR identical image bytes (generators often embed the logo once per page).
+ * "The same image" is the same XObject OR an identical-looking copy (`imageFingerprint`) — generators often embed the
+ * logo once per page.
  */
 export async function scanPdfImages(doc: PDFDocument, scan: PdfTextScan, ctx: ScanContext): Promise<Candidate[]> {
   const byRef = new Map<string, ImagePlacement[]>();
@@ -199,7 +222,7 @@ export async function scanPdfImages(doc: PDFDocument, scan: PdfTextScan, ctx: Sc
     const rect = quadRect(doc, first);
     const stream = first.ref ? doc.context.lookup(first.ref) : undefined;
     const area = rect.w * rect.h;
-    const ck = stream instanceof PDFRawStream && area <= 0.5 && area >= 0.0004 ? contentKey(stream) : undefined;
+    const ck = stream instanceof PDFRawStream && area <= 0.5 && area >= 0.0004 ? imageFingerprint(doc, stream) : undefined;
     const target = ck ? byContent.get(ck) : undefined;
     if (target) groups.get(target)!.push(...placements);
     else {

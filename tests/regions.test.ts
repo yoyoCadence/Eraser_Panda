@@ -5,6 +5,7 @@ import { pageList, pagesLabel } from '../src/core/pages';
 import type { Region, ScanContext } from '../src/core/types';
 import { interpretAll } from '../src/formats/pdf/content/textScan';
 import { pdfHandler } from '../src/formats/pdf/handler';
+import { imageFingerprint } from '../src/formats/pdf/images';
 import { denormRect, normRect, streamBytes } from '../src/formats/pdf/pdfdoc';
 
 const base: ScanContext = { rules: [...DEFAULT_RULES] };
@@ -240,5 +241,33 @@ describe('findings drawn on many pages', () => {
     expect(logos[0]!.highlights![1]!.rects.some((r) => Math.abs(r.x - 0.8) < 0.001)).toBe(true);
     const out = await pdfHandler.apply(input, base, new Set([logos[0]!.id]));
     expect(latin1(out)).not.toMatch(/\/Subtype\s*\/Image/);
+  });
+
+  it('images with the same pixel bytes but a different mask are NOT the same logo', async () => {
+    const doc = await PDFDocument.create();
+    const c = doc.context;
+    const pixels = new Uint8Array([10, 10, 10, 10, 10, 10]); // a flat swatch: only the mask gives it a shape
+    const mask = (bits: number[]) => c.register(c.flateStream(new Uint8Array(bits), { Type: 'XObject', Subtype: 'Image', Width: 3, Height: 2, ColorSpace: 'DeviceGray', BitsPerComponent: 8 }));
+    const image = (m: ReturnType<typeof mask>) =>
+      c.register(c.flateStream(pixels, { Type: 'XObject', Subtype: 'Image', Width: 3, Height: 2, ColorSpace: 'DeviceGray', BitsPerComponent: 8, SMask: m }));
+    const tick = image(mask([255, 0, 255, 0, 255, 0]));
+    const cross = image(mask([0, 255, 0, 255, 0, 255]));
+    const tickCopy = image(mask([255, 0, 255, 0, 255, 0])); // separate objects, identical content → same logo
+    expect(imageFingerprint(doc, tick)).not.toBe(imageFingerprint(doc, cross));
+    expect(imageFingerprint(doc, tick)).toBe(imageFingerprint(doc, tickCopy));
+    for (const [p, img] of [tick, cross, tickCopy].entries()) {
+      const page = doc.addPage([600, 800]);
+      page.node.set(PDFName.of('Contents'), c.register(c.flateStream(`q 60 0 0 30 ${40 + p * 200} 750 cm /I Do Q`)));
+      page.node.set(PDFName.of('Resources'), c.obj({ XObject: { I: img } }));
+    }
+    const { findings } = await pdfHandler.scan(await doc.save(), base);
+    const logos = findings.filter((f) => f.kind === 'image').map((f) => [f.where, f.highlights!.map((h) => h.page)]);
+    expect(logos).toEqual(
+      expect.arrayContaining([
+        ['第 1、3 頁・頁首圖片', [1, 3]],
+        ['第 2 頁・頁首圖片', [2]],
+      ]),
+    );
+    expect(logos).toHaveLength(2);
   });
 });

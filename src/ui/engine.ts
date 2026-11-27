@@ -98,13 +98,19 @@ export function initialSelection(result: ScanResult, previous?: { result?: ScanR
   );
 }
 
+type Previous = { result?: ScanResult; selected: Set<string> };
+
 export async function scanBytes(
   key: string,
   bytes: Uint8Array,
   format: FormatId,
   ctx: ScanContext,
   patch: Patch,
-  previous?: { result?: ScanResult; selected: Set<string> },
+  /**
+   * The selection to carry over. Pass a getter when the user can keep editing the selection while the scan runs
+   * (background re-scans): it is read when the scan COMPLETES, so those edits are not overwritten.
+   */
+  previous?: Previous | (() => Previous | undefined),
   /** false → a newer scan of this document started meanwhile; drop this result */
   isCurrent: () => boolean = () => true,
 ): Promise<void> {
@@ -112,7 +118,8 @@ export async function scanBytes(
     await yieldToUi();
     const result = await handlerFor(format)!.scan(bytes, ctx);
     if (!isCurrent()) return;
-    patch(key, { status: 'ready', rescanning: false, result, selected: initialSelection(result, previous), output: undefined, error: undefined });
+    const prev = typeof previous === 'function' ? previous() : previous;
+    patch(key, { status: 'ready', rescanning: false, result, selected: initialSelection(result, prev), output: undefined, error: undefined });
   } catch (e) {
     if (isCurrent()) patch(key, { status: 'error', rescanning: false, error: errorMessage(e) });
   }
