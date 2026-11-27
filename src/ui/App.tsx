@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { buildRules, loadSettings, saveSettings, type Settings } from '../core/settings';
 import { reportCsv, reportJson } from '../core/report';
-import type { ScanContext } from '../core/types';
+import type { Region, ScanContext } from '../core/types';
+import { BusyOverlay, type Busy } from './BusyOverlay';
 import { DropZone } from './DropZone';
-import { cleanDoc, download, downloadZip, readAndScan, scanBytes, type DocState } from './engine';
+import { CLEAN_STEPS, cleanDoc, docContext, download, downloadZip, readAndScan, scanBytes, type DocState } from './engine';
 import { FindingsPanel } from './FindingsPanel';
 import { browserDecode } from './imageDecode';
 import { SettingsDialog } from './SettingsDialog';
@@ -27,6 +28,14 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirm, setConfirm] = useState<null | (() => void)>(null);
   const [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState<Busy | null>(null);
+  /** per-document scan generation: a re-scan result is applied only if no newer scan of that document started */
+  const scanGen = useRef(new Map<string, number>());
+  const nextGen = (key: string) => {
+    const g = (scanGen.current.get(key) ?? 0) + 1;
+    scanGen.current.set(key, g);
+    return () => scanGen.current.get(key) === g;
+  };
   const onSkipped = useCallback((n: number) => setNotice(`資料夾中有 ${n} 個檔案未加入（不支援的格式、Office 暫存鎖定檔 ~$ 或隱藏檔）。`), []);
   const confirmRef = useRef<HTMLDialogElement>(null);
   const [dontAsk, setDontAsk] = useState(false);
@@ -59,7 +68,7 @@ export function App() {
 
   const addFiles = useCallback(
     async (files: File[]) => {
-      const added: DocState[] = files.map((f) => ({ key: `d${++seq}`, name: f.name, size: f.size, status: 'reading', selected: new Set() }));
+      const added: DocState[] = files.map((f) => ({ key: `d${++seq}`, name: f.name, size: f.size, status: 'reading', selected: new Set(), regions: [] }));
       setDocs((list) => [...list, ...added]);
       setActiveKey((k) => k ?? added[0]?.key ?? null);
       for (let i = 0; i < files.length; i++) await readAndScan(files[i]!, added[i]!.key, ctxRef.current, patch);
@@ -78,19 +87,32 @@ export function App() {
       for (const d of docsRef.current) {
         if (d.bytes && d.format && (d.status === 'ready' || d.status === 'done')) {
           patch(d.key, { status: 'scanning' });
-          await scanBytes(d.key, d.bytes, d.format, { ...scanCtx, fileName: d.name }, patch, { result: d.result, selected: d.selected });
+          await scanBytes(d.key, d.bytes, d.format, docContext(scanCtx, d), patch, { result: d.result, selected: d.selected }, nextGen(d.key));
         }
       }
     })();
   }, [scanCtx, patch]);
 
+  /** Regions changed → re-scan this document in the background; the panel and preview stay in place. */
+  const setRegions = useCallback(
+    (key: string, regions: Region[]) => {
+      const doc = docsRef.current.find((d) => d.key === key);
+      if (!doc?.bytes || !doc.format) return;
+      const next = { ...doc, regions };
+      patch(key, { regions, rescanning: true, output: undefined, status: 'ready' });
+      void scanBytes(key, doc.bytes, doc.format, docContext(ctxRef.current, next), patch, { result: doc.result, selected: doc.selected }, nextGen(key));
+    },
+    [patch],
+  );
+
   const clean = useCallback(
-    async (key: string, autoDownload = true) => {
+    async (key: string, autoDownload = true, position = { index: 1, total: 1 }) => {
       const doc = docsRef.current.find((d) => d.key === key);
       if (!doc || !doc.result) return undefined;
       patch(key, { status: 'cleaning', cleanError: undefined });
+      setBusy({ file: doc.name, ...position, step: 0 });
       try {
-        const output = await cleanDoc(doc, ctxRef.current);
+        const output = await cleanDoc(doc, ctxRef.current, (step) => setBusy({ file: doc.name, ...position, step }));
         patch(key, { status: 'done', output });
         if (autoDownload) download(output.name, output.bytes);
         return output;
@@ -98,6 +120,8 @@ export function App() {
         // keep the scan result so the user can change the selection and retry
         patch(key, { status: 'ready', cleanError: `清除失敗：${(e as Error).message}` });
         return undefined;
+      } finally {
+        if (autoDownload) setBusy(null);
       }
     },
     [patch],
@@ -106,12 +130,16 @@ export function App() {
   const cleanAll = useCallback(async () => {
     const targets = docsRef.current.filter((d) => (d.status === 'ready' || d.status === 'done') && d.result);
     const outputs = [];
-    for (const d of targets) {
-      const o = await clean(d.key, false);
-      if (o) outputs.push(o);
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const o = await clean(targets[i]!.key, false, { index: i + 1, total: targets.length });
+        if (o) outputs.push(o);
+      }
+      if (outputs.length === 1) download(outputs[0]!.name, outputs[0]!.bytes);
+      else if (outputs.length > 1) downloadZip(outputs);
+    } finally {
+      setBusy(null);
     }
-    if (outputs.length === 1) download(outputs[0]!.name, outputs[0]!.bytes);
-    else if (outputs.length > 1) downloadZip(outputs);
   }, [clean]);
 
   const remove = (key: string) => {
@@ -229,6 +257,7 @@ export function App() {
               <FindingsPanel
                 doc={active}
                 onSelect={(ids) => patch(active.key, { selected: ids, output: undefined, status: 'ready' })}
+                onRegions={(regions) => setRegions(active.key, regions)}
                 onClean={() => guarded(() => void clean(active.key))}
                 onDownloadAgain={() => active.output && download(active.output.name, active.output.bytes)}
               />
@@ -236,6 +265,8 @@ export function App() {
           </div>
         </main>
       )}
+
+      {busy && <BusyOverlay busy={busy} steps={CLEAN_STEPS} />}
 
       <dialog
         ref={confirmRef}

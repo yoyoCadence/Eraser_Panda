@@ -15,7 +15,8 @@ export type FindingKind =
   | 'metadata' //    a document property / sensitivity label / XMP entry
   | 'image' //       a logo candidate
   | 'watermark' //   a whole watermark object (Word VML watermark, PDF watermark artifact)
-  | 'annotation'; // a PDF annotation (e.g. "Confidential" stamp) or Office comment
+  | 'annotation' // a PDF annotation (e.g. "Confidential" stamp) or Office comment
+  | 'region'; //     everything inside a rectangle the user drew on the preview (PDF)
 
 /** Where it was found — drives grouping in the UI and the "body text may change meaning" warning. */
 export type LocationKind =
@@ -35,6 +36,7 @@ export type LocationKind =
   | 'annotation'
   | 'bookmark'
   | 'formField'
+  | 'region' //      user-drawn removal region
   | 'other';
 
 export type Confidence = 'high' | 'medium' | 'low';
@@ -66,6 +68,11 @@ export interface Finding {
   part?: string;
   /** Highlight boxes on `page`. */
   rects?: NormRect[];
+  /**
+   * Highlight boxes on EVERY page the finding affects (including `page`) — e.g. a logo or header that is one shared
+   * object drawn on 80 pages. When present, previews use this instead of `page` + `rects`.
+   */
+  highlights?: Array<{ page: number; rects: NormRect[] }>;
   /** Data URL thumbnail (images). */
   thumbnail?: string;
   confidence: Confidence;
@@ -86,6 +93,40 @@ export interface ScanResult {
   pageCount?: number;
   /** Structured text preview (Office / text formats; PDF is previewed visually). */
   preview?: PreviewBlock[];
+  /** What each user-drawn region (ScanContext.regions) contains, by region id (PDF). */
+  regionStats?: Record<string, RegionStats>;
+}
+
+/**
+ * A rectangle the user drew on the PDF preview: remove everything inside it on pages `from`..`to`.
+ * The rectangle is normalised to the page AS DISPLAYED (0..1, origin top-left), so "the same place" means the same
+ * relative position on every page of the range.
+ */
+export interface Region {
+  /** Stable id assigned by the UI (finding id = `region:<id>`). */
+  id: string;
+  rect: NormRect;
+  /** 1-based first page */
+  from: number;
+  /** 1-based last page (inclusive) */
+  to: number;
+}
+
+export interface RegionStats {
+  /** removable glyphs (characters) */
+  text: number;
+  images: number;
+  /** vector graphics (paths) */
+  paths: number;
+  annots: number;
+  /** objects only partly inside the region (left alone — an image cannot be cut in half) */
+  partial: number;
+  /** objects inside the region that are shared with pages / positions outside it (left alone) */
+  shared: number;
+  /** pages of the range that exist in the document */
+  pages: number;
+  /** a few characters of the text found inside (UI only, never written to reports) */
+  sample: string;
 }
 
 /** One section of the structured preview: a slide, a header, a sheet, the body … */
@@ -131,6 +172,8 @@ export interface ScanContext {
   logoHashes?: string[];
   /** Decoder for encoded images (JPEG …) — provided by the browser; PNG and raw PDF images are decoded in-engine. */
   decodeImage?: import('./image').ImageDecoder;
+  /** User-drawn removal regions for THIS file (PDF only). */
+  regions?: Region[];
 }
 
 /** Thrown for problems the user can act on; `message` is shown verbatim in the UI. */

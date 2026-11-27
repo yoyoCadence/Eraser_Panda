@@ -22,6 +22,13 @@ export function apply(m: Matrix, x: number, y: number): [number, number] {
   return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
 }
 
+/** Inverse of an affine matrix, or null when it is singular. */
+export function invert(m: Matrix): Matrix | null {
+  const det = m[0] * m[3] - m[1] * m[2];
+  if (!det || !Number.isFinite(det)) return null;
+  return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det];
+}
+
 /** A content stream we may rewrite: a page's (concatenated) contents, or a Form XObject. */
 export interface Source {
   key: string;
@@ -60,6 +67,18 @@ export interface TextRun {
   invisible: boolean;
 }
 
+/** One painted (or clipping) path: its construction operators, optional W / W* and the painting operator. */
+export interface PathPlacement {
+  src: Source;
+  page: number;
+  /** indices of every instruction that belongs to this path */
+  instrs: number[];
+  /** bounding box of all path points (control points included) in user space: [x1, y1, x2, y2] */
+  bbox: [number, number, number, number];
+  /** the path also sets the clipping path — never removed (that would reveal clipped content) */
+  clip: boolean;
+}
+
 export interface ImagePlacement {
   page: number;
   src: Source;
@@ -85,16 +104,82 @@ interface GState {
   tr: number;
 }
 
+/** Every `Do` of a Form XObject: which source drew it and with which matrix (in that source's interpreted space). */
+export interface FormCall {
+  key: string;
+  parent: Source;
+  ctm: Matrix;
+}
+
 export interface InterpretResult {
   runs: TextRun[];
   images: ImagePlacement[];
+  paths: PathPlacement[];
   sources: Source[];
-  /** form key → pages where it is used */
+  /** form key → pages where it is used (direct uses only; see `placementsOf` for nested forms) */
   formUses: Map<string, Set<number>>;
+  /** form key → the matrix the form was interpreted with (its first use) */
+  formBase: Map<string, Matrix>;
+  formCalls: FormCall[];
+  trackPaths: boolean;
 }
 
-export function newResult(): InterpretResult {
-  return { runs: [], images: [], sources: [], formUses: new Map() };
+/**
+ * @param trackPaths record vector paths (only needed for user regions — drawing-heavy PDFs have millions of them)
+ */
+export function newResult(trackPaths = false): InterpretResult {
+  return { runs: [], images: [], paths: [], sources: [], formUses: new Map(), formBase: new Map(), formCalls: [], trackPaths };
+}
+
+/** Where a source's content really appears: one entry per drawing on a page. */
+export interface Placement {
+  page: number;
+  /** maps the source's interpreted user-space coordinates to this placement's page coordinates (null: unknown) */
+  t: Matrix | null;
+}
+
+/**
+ * Every placement of a source. Positions computed while interpreting a Form XObject belong to its FIRST use; a form
+ * drawn on several pages (or several times, or inside another shared form) appears elsewhere too. This maps the
+ * interpreted coordinates to every real occurrence, so highlights and region hit tests are right on every page.
+ */
+export function placementsOf(res: InterpretResult, src: Source, memo = new Map<string, Placement[]>(), depth = 0): Placement[] {
+  if (src.kind === 'page') return [{ page: src.page, t: IDENTITY }];
+  const cached = memo.get(src.key);
+  if (cached) return cached;
+  memo.set(src.key, []); // cycle guard
+  const base = res.formBase.get(src.key);
+  const inv = base ? invert(base) : null;
+  const out: Placement[] = [];
+  if (depth < 16)
+    for (const call of callsByKey(res).get(src.key) ?? []) {
+      for (const p of placementsOf(res, call.parent, memo, depth + 1)) {
+        out.push({ page: p.page, t: inv && p.t ? mul(mul(inv, call.ctm), p.t) : null });
+      }
+    }
+  if (!out.length) out.push({ page: src.page, t: IDENTITY });
+  memo.set(src.key, out);
+  return out;
+}
+
+const callIndex = new WeakMap<InterpretResult, Map<string, FormCall[]>>();
+function callsByKey(res: InterpretResult): Map<string, FormCall[]> {
+  let idx = callIndex.get(res);
+  if (!idx || idx.size === 0) {
+    idx = new Map();
+    for (const c of res.formCalls) {
+      const list = idx.get(c.key);
+      if (list) list.push(c);
+      else idx.set(c.key, [c]);
+    }
+    callIndex.set(res, idx);
+  }
+  return idx;
+}
+
+/** Sorted distinct pages of a set of placements. */
+export function placementPages(list: readonly Placement[]): number[] {
+  return [...new Set(list.map((p) => p.page))].sort((a, b) => a - b);
 }
 
 /** Interpret one page (and every Form XObject it draws, once per document). */
@@ -143,6 +228,32 @@ function run(doc: PDFDocument, src: Source, resources: PDFDict | undefined, ctm0
   let tlm: Matrix = IDENTITY;
   const mcStack: McKind[] = [];
   const mc = () => mcStack.reduce<McKind>((acc, k) => k ?? acc, mc0);
+  // current path under construction
+  const track = out.trackPaths;
+  let pathInstrs: number[] = [];
+  let bx1 = Infinity;
+  let by1 = Infinity;
+  let bx2 = -Infinity;
+  let by2 = -Infinity;
+  let pathClip = false;
+  const pathPoint = (x: number, y: number) => {
+    if (!track) return;
+    const [px, py] = apply(gs.ctm, x, y);
+    if (px < bx1) bx1 = px;
+    if (px > bx2) bx2 = px;
+    if (py < by1) by1 = py;
+    if (py > by2) by2 = py;
+  };
+  const endPath = (idx: number, painted: boolean) => {
+    if (track && pathInstrs.length && painted && bx1 <= bx2) out.paths.push({ src, page: src.page, instrs: [...pathInstrs, idx], bbox: [bx1, by1, bx2, by2], clip: pathClip });
+    pathInstrs = [];
+    bx1 = by1 = Infinity;
+    bx2 = by2 = -Infinity;
+    pathClip = false;
+  };
+  const pathOp = (idx: number) => {
+    if (track) pathInstrs.push(idx);
+  };
 
   const show = (bytes: Uint8Array, instr: number, elem: number) => {
     const font = gs.font;
@@ -184,6 +295,53 @@ function run(doc: PDFDocument, src: Source, resources: PDFDict | undefined, ctm0
   src.instrs.forEach((ins, idx) => {
     const a = ins.args;
     switch (ins.op) {
+      case 'm':
+      case 'l':
+        pathOp(idx);
+        pathPoint(numArg(a[0]), numArg(a[1]));
+        break;
+      case 'c':
+        pathOp(idx);
+        for (let k = 0; k < 6; k += 2) pathPoint(numArg(a[k]), numArg(a[k + 1]));
+        break;
+      case 'v':
+      case 'y':
+        pathOp(idx);
+        for (let k = 0; k < 4; k += 2) pathPoint(numArg(a[k]), numArg(a[k + 1]));
+        break;
+      case 're': {
+        pathOp(idx);
+        const [x, y, w, h] = [numArg(a[0]), numArg(a[1]), numArg(a[2]), numArg(a[3])];
+        pathPoint(x, y);
+        pathPoint(x + w, y);
+        pathPoint(x + w, y + h);
+        pathPoint(x, y + h);
+        break;
+      }
+      case 'h':
+        if (pathInstrs.length) pathInstrs.push(idx);
+        break;
+      case 'W':
+      case 'W*':
+        if (pathInstrs.length) {
+          pathInstrs.push(idx);
+          pathClip = true;
+        }
+        break;
+      case 'S':
+      case 's':
+      case 'f':
+      case 'F':
+      case 'f*':
+      case 'B':
+      case 'B*':
+      case 'b':
+      case 'b*':
+        endPath(idx, true);
+        break;
+      case 'n':
+        endPath(idx, false);
+        break;
       case 'q':
         stack.push({ ...gs });
         break;
@@ -277,20 +435,23 @@ function run(doc: PDFDocument, src: Source, resources: PDFDict | undefined, ctm0
           out.images.push({ page: src.page, src, instr: idx, name, ref: ref instanceof PDFRef ? ref : undefined, quad: unitQuad(gs.ctm), mc: mc() });
         } else if (sub === 'Form' && depth < 12) {
           const key = ref instanceof PDFRef ? `x${ref.objectNumber}_${ref.generationNumber}` : `${src.key}/${name}`;
+          const fm = lookupArray(doc, xo.dict.get(PDFName.of('Matrix')));
+          const m: Matrix = fm && fm.size() >= 6 ? ([0, 1, 2, 3, 4, 5].map((k) => (fm.lookup(k) as PDFNumber | undefined)?.asNumber?.() ?? IDENTITY[k]!) as Matrix) : IDENTITY;
+          const ctm = mul(m, gs.ctm);
+          out.formCalls.push({ key, parent: src, ctm });
           const uses = out.formUses.get(key);
           if (uses) {
             uses.add(src.page);
-            break; // interpreted already (first use wins for positions)
+            break; // interpreted already (first use wins for positions; see placementsOf)
           }
           out.formUses.set(key, new Set([src.page]));
           const bytes = streamBytes(xo);
           if (!bytes) break;
-          const fm = lookupArray(doc, xo.dict.get(PDFName.of('Matrix')));
-          const m: Matrix = fm && fm.size() >= 6 ? ([0, 1, 2, 3, 4, 5].map((k) => (fm.lookup(k) as PDFNumber | undefined)?.asNumber?.() ?? IDENTITY[k]!) as Matrix) : IDENTITY;
           const formSrc: Source = { key, kind: 'form', page: src.page, ref: ref instanceof PDFRef ? ref : undefined, data: bytes, instrs: parseContent(bytes) };
           out.sources.push(formSrc);
+          out.formBase.set(key, ctm);
           const res = lookupDict(doc, xo.dict.get(PDFName.of('Resources'))) ?? resources;
-          run(doc, formSrc, res, mul(m, gs.ctm), out, depth + 1, mc());
+          run(doc, formSrc, res, ctm, out, depth + 1, mc());
         }
         break;
       }

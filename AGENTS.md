@@ -33,7 +33,7 @@ npm run release        # 產出 release/EraserPanda.html（使用者下載的檔
 ## 程式碼地圖
 ```
 src/core/        與格式無關：型別、檔案類型偵測、規則、正規化、比對、跨片段映射、候選刪除模型、預覽、影像雜湊、報告
-src/formats/     各格式 handler（實作 FormatHandler：scan / apply）—— ooxml/、pdf/（content/ 為內容串流引擎）、text/
+src/formats/     各格式 handler（實作 FormatHandler：scan / apply）—— ooxml/、pdf/（content/ 為內容串流引擎；regions.ts 為使用者框選區域）、text/
 src/verify/      原始位元組驗證器
 src/ui/          Preact 介面
 tests/           Vitest 單元測試（happy-dom 環境）；tests/fixtures 樣本文件

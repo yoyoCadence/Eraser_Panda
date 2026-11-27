@@ -3,7 +3,7 @@ import { cleanFileName, detectFormat } from '../core/fileType';
 import { compileRules } from '../core/matcher';
 import { sha256, type ReportFile } from '../core/report';
 import { rawScan, type RawHit } from '../verify/raw';
-import type { FormatId, ScanContext, ScanResult } from '../core/types';
+import type { FormatId, Region, ScanContext, ScanResult } from '../core/types';
 import { handlerFor } from '../formats';
 
 export type DocStatus = 'reading' | 'scanning' | 'ready' | 'cleaning' | 'done' | 'error';
@@ -35,10 +35,37 @@ export interface DocState {
   output?: CleanOutput;
   /** last cleaning attempt failed (the scan result is still valid) */
   cleanError?: string;
+  /** user-drawn removal regions (PDF) */
+  regions: Region[];
+  /** a background re-scan is running (regions changed) — the panel stays usable */
+  rescanning?: boolean;
 }
 
-/** Let the browser paint (spinners, progress) before a long synchronous step. */
-export const yieldToUi = () => new Promise<void>((r) => setTimeout(r, 0));
+/**
+ * Let the browser paint (spinners, progress text) before a long synchronous step. A plain setTimeout(0) can run
+ * before the next frame is painted, so wait for a frame — with a timer fallback for background tabs, where
+ * requestAnimationFrame does not fire.
+ */
+export const yieldToUi = () =>
+  new Promise<void>((resolve) => {
+    let done = false;
+    const go = () => {
+      if (done) return;
+      done = true;
+      setTimeout(resolve, 0);
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(go);
+    setTimeout(go, 50);
+  });
+
+/** The scan context for one document: shared settings + this file's name and regions. */
+export function docContext(base: ScanContext, doc: Pick<DocState, 'name' | 'regions'>): ScanContext {
+  return { ...base, fileName: doc.name, regions: doc.regions };
+}
+
+/** Steps of cleaning one file, shown in the progress overlay. */
+export const CLEAN_STEPS = ['移除選取的項目', '驗證：重新掃描輸出檔', '驗證：檢查原始位元組', '產生處理報告'] as const;
+export type CleanProgress = (step: number) => void;
 
 export type Patch = (key: string, patch: Partial<DocState>) => void;
 
@@ -50,7 +77,7 @@ export async function readAndScan(file: File, key: string, ctx: ScanContext, pat
     const handler = handlerFor(det.format);
     if (!handler) return patch(key, { status: 'error', format: det.format, bytes, error: '不支援的檔案格式。' });
     patch(key, { status: 'scanning', bytes, format: det.format });
-    await scanBytes(key, bytes, det.format, { ...ctx, fileName: file.name }, patch);
+    await scanBytes(key, bytes, det.format, docContext(ctx, { name: file.name, regions: [] }), patch);
   } catch (e) {
     patch(key, { status: 'error', error: errorMessage(e) });
   }
@@ -78,27 +105,37 @@ export async function scanBytes(
   ctx: ScanContext,
   patch: Patch,
   previous?: { result?: ScanResult; selected: Set<string> },
+  /** false → a newer scan of this document started meanwhile; drop this result */
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   try {
     await yieldToUi();
     const result = await handlerFor(format)!.scan(bytes, ctx);
-    patch(key, { status: 'ready', result, selected: initialSelection(result, previous), output: undefined, error: undefined });
+    if (!isCurrent()) return;
+    patch(key, { status: 'ready', rescanning: false, result, selected: initialSelection(result, previous), output: undefined, error: undefined });
   } catch (e) {
-    patch(key, { status: 'error', error: errorMessage(e) });
+    if (isCurrent()) patch(key, { status: 'error', rescanning: false, error: errorMessage(e) });
   }
 }
 
-export async function cleanDoc(doc: DocState, baseCtx: ScanContext): Promise<CleanOutput> {
+export async function cleanDoc(doc: DocState, baseCtx: ScanContext, onStep: CleanProgress = () => {}): Promise<CleanOutput> {
   const handler = handlerFor(doc.format!)!;
-  const ctx = { ...baseCtx, fileName: doc.name }; // same context as the scan, so removals match what was shown
+  const ctx = docContext(baseCtx, doc); // same context as the scan, so removals match what was shown
+  onStep(0);
   await yieldToUi();
   const ids = new Set([...doc.selected].filter((id) => doc.result!.findings.some((f) => f.id === id && f.removable)));
   const bytes = await handler.apply(doc.bytes!, ctx, ids);
   // Verify: re-scan the output. Everything still found must be something the user chose to keep.
+  onStep(1);
+  await yieldToUi();
   const rescan = await handler.scan(bytes, ctx);
   const kept = doc.result!.findings.length - ids.size;
   const residual = Math.max(0, rescan.findings.length - kept);
+  onStep(2);
+  await yieldToUi();
   const raw = rawScan(doc.format!, bytes, compileRules(ctx.rules));
+  onStep(3);
+  await yieldToUi();
   const name = cleanFileName(doc.name);
   const findings = doc.result!.findings;
   const report: ReportFile = {
